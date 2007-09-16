@@ -1,0 +1,8 @@
+CREATE FUNCTION pllua_call_handler()
+  RETURNS language_handler
+  AS '_OBJWD_/pllua'
+  LANGUAGE C IMMUTABLE STRICT;
+
+CREATE TRUSTED LANGUAGE pllua
+  HANDLER pllua_call_handler;
+
