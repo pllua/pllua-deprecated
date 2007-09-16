@@ -1,3 +1,5 @@
+-- $Id: pllua.source,v 1.2 2007/09/16 01:26:28 carvalho Exp $
+
 CREATE FUNCTION pllua_call_handler()
   RETURNS language_handler
   AS '_OBJWD_/pllua'
@@ -6,3 +8,4 @@ CREATE FUNCTION pllua_call_handler()
 CREATE TRUSTED LANGUAGE pllua
   HANDLER pllua_call_handler;
 
+-- vim: set syn=sql:
