@@ -1,3 +1,10 @@
+/*
+ * PL/Lua
+ * Author: Luis Carvalho <lexcarvalho at gmail.com>
+ * Please check copyright notice at the bottom of this file
+ * $Id: pllua.c,v 1.2 2007/09/16 01:24:07 carvalho Exp $
+ */
+
 /* PostgreSQL */
 #include <postgres.h>
 #include <executor/spi.h>
