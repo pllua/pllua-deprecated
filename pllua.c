@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.3 2007/09/18 21:51:00 carvalho Exp $
+ * $Id: pllua.c,v 1.4 2007/09/18 22:03:17 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -92,7 +92,6 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   relname = NameStr(tdata->tg_relation->rd_rel->relname);
   lua_getfield(L, LUA_REGISTRYINDEX, relname);
   if (lua_isnil(L, -1)) { /* not cached? */
-    int i;
     lua_pop(L, 1);
     lua_createtable(L, 0, 2);
     lua_pushstring(L, relname);
@@ -107,9 +106,9 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   }
   lua_setfield(L, -2, "relation");
   /* row */
-  luaP_pushtuple(L, tdesc,
+  luaP_pushtuple(L, tdata->tg_relation->rd_att,
       (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) ? tdata->tg_newtuple
-      : tdata->tg_trigtuple, tdata->tg_relation->rd_id);
+      : tdata->tg_trigtuple, tdata->tg_relation->rd_id, 0);
   lua_setfield(L, -2, "row");
   /* trigger name */
   lua_pushstring(L, tdata->tg_trigger->tgname);
@@ -430,7 +429,7 @@ static void luaP_pusharray (lua_State *L, char **p, int ndims,
   }
 }
 
-static void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
+void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
   switch(type) {
     case BOOLOID:
       lua_pushboolean(L, (int) (dat != 0));
@@ -631,7 +630,7 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
   }
 }
 
-static Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
+Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
   Datum dat = 0; /* NULL */
   *isnull = lua_isnil(L, -1);
   if (!(*isnull || type == VOIDOID)) {

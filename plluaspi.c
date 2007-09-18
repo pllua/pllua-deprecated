@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.1 2007/09/18 21:51:00 carvalho Exp $
+ * $Id: plluaspi.c,v 1.2 2007/09/18 22:03:17 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -10,7 +10,6 @@
 #define SPI_plan void
 #define PLLUA_BUFFER "_luaP_Buffer"
 #define PLLUA_TUPTABLE "_luaP_Tuptable"
-#define PLLUA_TUPLEMT "luaP_Tuple"
 #define PLLUA_PLANMT "luaP_Plan"
 #define PLLUA_CURSORMT "luaP_Cursor"
 #define PLLUA_TUPTABLEMT "luaP_Tuptable"
@@ -21,14 +20,15 @@ typedef struct luaP_Buffer {
   char *null;
 } luaP_Buffer;
 
-typedef struct luaP_Tuple {
-  int changed;
-  Oid relid;
-  HeapTuple tuple;
-  TupleDesc desc;
-  Datum *value;
-  bool *null;
-} luaP_Tuple;
+typedef struct luaP_Tuptable {
+  int size;
+  Portal cursor;
+  SPITupleTable *tuptable;
+} luaP_Tuptable;
+
+typedef struct luaP_Cursor {
+  Portal cursor;
+} luaP_Cursor;
 
 typedef struct luaP_Plan {
   int nargs;
@@ -37,20 +37,11 @@ typedef struct luaP_Plan {
   Oid *type;
 } luaP_Plan;
 
-typedef struct luaP_Cursor {
-  Portal cursor;
-} luaP_Cursor;
-
-typedef struct luaP_Tuptable {
-  int size;
-  Portal cursor;
-  SPITupleTable *tuptable;
-} luaP_Tuptable;
-
 
 /* ======= Utils ======= */
 
 void luaP_pushdesctable(lua_State *L, TupleDesc desc) {
+  int i;
   lua_newtable(L);
   for (i = 0; i < desc->natts; i++) {
     lua_pushstring(L, NameStr(desc->attrs[i]->attname));
@@ -148,7 +139,7 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
   luaP_Tuple *t;
   int i, n = desc->natts;
   if (readonly) {
-    t = lua_newuserdata(L, sizeof(luaP_Tuple))
+    t = lua_newuserdata(L, sizeof(luaP_Tuple));
     t->changed = -1;
     t->value = NULL;
     t->null = NULL;
@@ -174,15 +165,89 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
 }
 
 
-/* ======= Plan ======= */
+/* ======= TupleTable ======= */
 
-static const luaL_reg luaP_Plan_funcs[] = {
-  {"execute", luaP_executeplan},
-  {"save", luaP_saveplan},
-  {"issaved", luaP_issaved},
-  {"getcursor", luaP_getcursorplan},
-  {NULL, NULL}
-};
+static void luaP_pushtuptable (lua_State *L, Portal cursor) {
+  luaP_Tuptable *t;
+  lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
+  t = (luaP_Tuptable *) lua_touserdata(L, -1);
+  if (t == NULL) { /* not initialized? */
+    lua_pop(L, 1);
+    t = (luaP_Tuptable *) lua_newuserdata(L, sizeof(luaP_Tuptable));
+    luaL_getmetatable(L, PLLUA_TUPTABLEMT);
+    lua_setmetatable(L, -2);
+    lua_pushvalue(L, -1); /* tuptable */
+    lua_setfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
+  }
+  t->size = SPI_processed;
+  t->tuptable = SPI_tuptable;
+  if (cursor == NULL || (cursor != NULL && t->cursor != cursor)) {
+    lua_pushinteger(L, (int) InvalidOid);
+    luaP_pushdesctable(L, t->tuptable->tupdesc);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+    t->cursor = cursor;
+  }
+  /* reset tuptable env */
+  lua_newtable(L); /* env */
+  lua_setfenv(L, -2);
+}
+
+static int luaP_tuptableindex (lua_State *L) {
+  luaP_Tuptable *t = (luaP_Tuptable *) lua_touserdata(L, 1);
+  int k = lua_tointeger(L, 2);
+  if (k > 0 && k <= t->size) {
+    lua_getfenv(L, 1);
+    lua_rawgeti(L, -1, k);
+    if (lua_isnil(L, -1)) { /* not interned? */
+      lua_pop(L, 1); /* nil */
+      luaP_pushtuple(L, t->tuptable->tupdesc, t->tuptable->vals[k - 1],
+          InvalidOid, 1);
+      lua_pushvalue(L, -1);
+      lua_rawseti(L, -3, k);
+    }
+  }
+  return 1;
+}
+
+
+/* ======= Cursor ======= */
+
+static int luaP_newcursor (lua_State *L, Portal cursor) {
+  luaP_Cursor *c = (luaP_Cursor *) lua_newuserdata(L, sizeof(luaP_Cursor));
+  c->cursor = cursor;
+  luaL_getmetatable(L, PLLUA_CURSORMT);
+  lua_setmetatable(L, -2);
+  return 1;
+}
+
+/* TODO check if needed */
+static int luaP_cursorgc (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, 1);
+  SPI_cursor_close(c->cursor);
+  return 0;
+}
+
+static int luaP_cursorfetch (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  SPI_cursor_fetch(c->cursor, 1, luaL_optlong(L, 2, FETCH_ALL));
+  luaP_pushtuptable(L, c->cursor);
+  return 1;
+}
+
+static int luaP_cursormove (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  SPI_cursor_move(c->cursor, 1, luaL_optlong(L, 2, 0));
+  return 0;
+}
+
+static int luaP_cursorclose (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  SPI_cursor_close(c->cursor);
+  return 0;
+}
+
+
+/* ======= Plan ======= */
 
 static int luaP_executeplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
@@ -242,104 +307,7 @@ static int luaP_getcursorplan (lua_State *L) {
 }
 
 
-/* ======= Cursor ======= */
-
-static int luaP_newcursor (lua_State *L, Portal cursor) {
-  luaP_Cursor *c = (luaP_Cursor *) lua_newuserdata(L, sizeof(luaP_Cursor));
-  c->cursor = cursor;
-  luaL_getmetatable(L, PLLUA_CURSORMT);
-  lua_setmetatable(L, -2);
-  return 1;
-}
-
-/* TODO check if needed */
-static int luaP_cursorgc (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, 1);
-  SPI_cursor_close(c->cursor);
-  return 0;
-}
-
-static const luaL_reg luaP_Cursor_funcs[] = {
-  {"fetch", luaP_cursorfetch},
-  {"move", luaP_cursormove},
-  {"close", luaP_cursorclose},
-  {NULL, NULL}
-};
-
-static int luaP_cursorfetch (lua_State *L) {
-  luaP_Tupletable *t;
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
-  SPI_cursor_fetch(c->cursor, 1, luaL_optlong(L, 2, FETCH_ALL));
-  luaP_pushtuptable(L, c->cursor);
-  return 1;
-}
-
-static int luaP_cursormove (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
-  SPI_cursor_move(c->cursor, 1, luaL_optlong(L, 2, 0));
-  return 0;
-}
-
-static int luaP_cursorclose (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
-  SPI_cursor_close(c->cursor);
-  return 0;
-}
-
-
-/* ======= TupleTable ======= */
-
-static void luaP_pushtuptable (lua_State *L, Portal cursor) {
-  luaP_Tuptable *t;
-  lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
-  t = (luaP_Tuptable *) lua_touserdata(L, -1);
-  if (t == NULL) { /* not initialized? */
-    lua_pop(L, 1);
-    t = (luaP_Tuptable *) lua_newuserdata(L, sizeof(luaP_Tuptable));
-    luaL_getmetatable(L, PLLUA_TUPTABLEMT);
-    lua_setmetatable(L, -2);
-    lua_pushvalue(L, -1); /* tuptable */
-    lua_setfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
-  }
-  t->size = SPI_processed;
-  t->tuptable = SPI_tuptable;
-  if (cursor == NULL || (cursor != NULL && t->cursor != cursor)) {
-    lua_pushinteger(L, (int) InvalidOid);
-    luaP_pushdesctable(L, t->tuptable->tupdesc);
-    lua_rawset(L, LUA_REGISTRYINDEX);
-    t->cursor = cursor;
-  }
-  /* reset tuptable env */
-  lua_newtable(L); /* env */
-  lua_setfenv(L, -2);
-}
-
-static int luaP_tuptableindex (lua_State *L) {
-  luaP_Tuptable *t = (luaP_Tuptable *) lua_touserdata(L, 1);
-  int k = lua_tointeger(L, 2);
-  if (k > 0 && k <= t->size) {
-    lua_getfenv(L, 1);
-    lua_rawgeti(L, -1, k);
-    if (lua_isnil(L, -1)) { /* not interned? */
-      lua_pop(L, 1); /* nil */
-      luaP_pushtuple(L, t->tuptable->tupdesc, t->tuptable->vals[k - 1],
-          InvalidOid);
-      lua_pushvalue(L, -1);
-      lua_rawseti(L, -3, k);
-    }
-  }
-  return 1;
-}
-
-
 /* ======= SPI ======= */
-
-static const luaL_reg luaP_SPI_funcs[] = {
-  {"prepare", luaP_prepare},
-  {"execute", luaP_execute},
-  {"find", luaP_find},
-  {NULL, NULL}
-};
 
 static int luaP_prepare (lua_State *L) {
   const char *q = luaL_checkstring(L, 1);
@@ -369,10 +337,9 @@ static int luaP_prepare (lua_State *L) {
       lua_pop(L, 1);
     }
   }
-  SPI_plan *plan = SPI_prepare(q, nargs, p->type);
+  p->plan = SPI_prepare(q, nargs, p->type);
   if (SPI_result < 0)
     luaL_error(L, "SPI_prepare error: %d", SPI_result);
-  p->plan = plan;
   luaL_getmetatable(L, PLLUA_PLANMT);
   lua_setmetatable(L, -2);
   return 1;
@@ -393,6 +360,31 @@ static int luaP_find (lua_State *L) {
   if (cursor != NULL) luaP_newcursor(L, cursor);
   return 1;
 }
+
+
+/* ======= luaP_registerspi ======= */
+
+static const luaL_reg luaP_Plan_funcs[] = {
+  {"execute", luaP_executeplan},
+  {"save", luaP_saveplan},
+  {"issaved", luaP_issavedplan},
+  {"getcursor", luaP_getcursorplan},
+  {NULL, NULL}
+};
+
+static const luaL_reg luaP_Cursor_funcs[] = {
+  {"fetch", luaP_cursorfetch},
+  {"move", luaP_cursormove},
+  {"close", luaP_cursorclose},
+  {NULL, NULL}
+};
+
+static const luaL_reg luaP_SPI_funcs[] = {
+  {"prepare", luaP_prepare},
+  {"execute", luaP_execute},
+  {"find", luaP_find},
+  {NULL, NULL}
+};
 
 void luaP_registerspi (lua_State *L) {
   /* tuple */
