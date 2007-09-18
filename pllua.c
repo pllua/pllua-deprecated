@@ -1,26 +1,11 @@
 /*
- * PL/Lua
+ * pllua.c: PL/Lua call handler
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
- * Please check copyright notice at the bottom of this file
- * $Id: pllua.c,v 1.2 2007/09/16 01:24:07 carvalho Exp $
+ * Please check copyright notice at the bottom of pllua.h
+ * $Id: pllua.c,v 1.3 2007/09/18 21:51:00 carvalho Exp $
  */
 
-/* PostgreSQL */
-#include <postgres.h>
-#include <executor/spi.h>
-#include <commands/trigger.h>
-#include <fmgr.h>
-#include <access/heapam.h>
-#include <utils/syscache.h>
-#include <utils/typcache.h>
-#include <utils/memutils.h>
-#include <catalog/pg_proc.h>
-#include <catalog/pg_type.h>
-#include <funcapi.h>
-/* Lua */
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
+#include "pllua.h"
 
 typedef struct luaP_Info {
   int oid;
@@ -34,11 +19,10 @@ typedef struct luaP_Info {
 #define PLLUA_LOCALVAR "upvalue"
 #define PLLUA_LOCALVARSZ 7
 #define PLLUA_SHAREDVAR "shared"
+#define PLLUA_SPIVAR "server"
 #define PLLUA_TRIGGERVAR "trigger"
 #define PLLUA_CHUNKNAME "pllua chunk"
 #define PLLUA_VARARG (-1)
-
-#define PLLUA_TUPLEMT "_luaP_Tuple"
 
 #ifdef PG_MODULE_MAGIC
 PG_MODULE_MAGIC;
@@ -68,84 +52,14 @@ PG_MODULE_MAGIC;
   lua_pushstring(L, PLLUA_TRIGGERVAR); lua_pushnil(L); \
   lua_rawset(L, LUA_GLOBALSINDEX);
 
-/* simple API */
-static void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
-static Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
 
 static lua_State *L = NULL; /* Lua VM */
 
 Datum pllua_call_handler(PG_FUNCTION_ARGS);
 
-
-/* luaP_Tuple */
-typedef struct luaP_Tuple {
-  int changed;
-  Oid relid;
-  HeapTuple tuple;
-  TupleDesc desc;
-  Datum *value;
-  bool *null;
-} luaP_Tuple;
-
-static int luaP_tupleindex (lua_State *L) {
-  luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
-  const char *name = luaL_checkstring(L, 2);
-  int i;
-  lua_pushinteger(L, (int) t->relid);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  lua_getfield(L, -1, name);
-  i = luaL_optinteger(L, -1, -1);
-  if (i >= 0 && !t->null[i])
-    luaP_pushdatum(L, t->value[i], t->desc->attrs[i]->atttypid);
-  else lua_pushnil(L);
-  return 1;
-}
-
-static int luaP_tuplenewindex (lua_State *L) {
-  luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
-  const char *name = luaL_checkstring(L, 2);
-  int i;
-  lua_pushinteger(L, (int) t->relid);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  lua_getfield(L, -1, name);
-  i = luaL_optinteger(L, -1, -1);
-  lua_settop(L, 3);
-  if (i >= 0) { /* found? */
-    bool isnull;
-    t->value[i] = luaP_todatum(L, t->desc->attrs[i]->atttypid,
-        t->desc->attrs[i]->atttypmod, &isnull);
-    t->null[i] = isnull;
-    t->changed = 1;
-  }
-  else luaL_error(L, "column not found in relation: '%s'", name);
-  return 0;
-}
-
-static void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
-    Oid relid) {
-  luaP_Tuple *t;
-  int i, n = desc->natts;
-  t = lua_newuserdata(L,
-      sizeof(luaP_Tuple) + n * (sizeof(Datum) + sizeof(bool)));
-  t->changed = 0;
-  t->relid = relid;
-  t->tuple = tuple;
-  t->desc = desc;
-  t->value = (Datum *) (t + 1);
-  t->null = (bool *) (t->value + n);
-  for (i = 0; i < n; i++) {
-    bool isnull;
-    t->value[i] = heap_getattr(tuple, desc->attrs[i]->attnum, desc, &isnull);
-    t->null[i] = isnull;
-  }
-  luaL_getmetatable(L, PLLUA_TUPLEMT);
-  lua_setmetatable(L, -2);
-}
-
-
+/* Trigger */
 static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   const char *relname;
-  TupleDesc tdesc = tdata->tg_relation->rd_att;
   lua_pushstring(L, PLLUA_TRIGGERVAR);
   lua_newtable(L);
   /* when */
@@ -183,12 +97,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
     lua_createtable(L, 0, 2);
     lua_pushstring(L, relname);
     lua_setfield(L, -2, "name");
-    lua_newtable(L);
-    for (i = 0; i < tdesc->natts; i++) {
-      lua_pushstring(L, NameStr(tdesc->attrs[i]->attname));
-      lua_pushinteger(L, i);
-      lua_rawset(L, -3);
-    }
+    luaP_pushdesctable(L, tdata->tg_relation->rd_att);
     lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
     lua_pushvalue(L, -2); /* attribute table */
     lua_rawset(L, LUA_REGISTRYINDEX); /* cache desc */
@@ -226,8 +135,6 @@ static Datum luaP_gettriggerresult (lua_State *L) {
   lua_pop(L, 2);
   return PointerGetDatum(tuple);
 }
-
-
 
 
 /* luaP_newstate: create a new Lua VM */
@@ -331,6 +238,9 @@ static lua_State *luaP_newstate (void) {
   lua_pushvalue(L, LUA_GLOBALSINDEX);
   luaL_register(L, NULL, luaP_funcs);
   lua_pop(L, 1);
+  /* SPI */
+  luaP_registerspi(L);
+  lua_setglobal(L, PLLUA_SPIVAR);
   /* metatable */
   lua_createtable(L, 0, 1);
   lua_pushcfunction(L, luaP_globalnewindex);
@@ -338,13 +248,6 @@ static lua_State *luaP_newstate (void) {
   lua_pushvalue(L, -1); /* metatable */
   lua_setfield(L, -2, "__metatable");
   lua_setmetatable(L, LUA_GLOBALSINDEX);
-  /* tuple */
-  luaL_newmetatable(L, PLLUA_TUPLEMT);
-  lua_pushcfunction(L, luaP_tupleindex);
-  lua_setfield(L, -2, "__index");
-  lua_pushcfunction(L, luaP_tuplenewindex);
-  lua_setfield(L, -2, "__newindex");
-  lua_pop(L, 1);
   return L;
 }
 
@@ -381,7 +284,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, FunctionCallInfo fcinfo,
   /* read arg types */
   for (i = 0; i < fcinfo->nargs; i++) {
     type = luaP_gettypechar(argtype[i]);
-    if (type == 'p' && argtype[i] != ANYARRAYOID) /* pseudo-type? */
+    if (type == 'p') /* pseudo-type? */
       ereport(ERROR,
           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
            errmsg("pllua functions cannot take type '%s'",
@@ -389,13 +292,13 @@ static luaP_Info *luaP_newinfo (lua_State *L, FunctionCallInfo fcinfo,
     fi->arg[i] = argtype[i];
   }
   /* read result type */
-  if (rettype != TRIGGEROID || !istrigger)
+  if ((rettype == TRIGGEROID && !istrigger)
+      || (rettype != TRIGGEROID && istrigger))
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
          errmsg("trigger function can only be called as trigger")));
   type = luaP_gettypechar(rettype);
-  if (type == 'p' && rettype != VOIDOID && rettype != ANYARRAYOID
-      && rettype != TRIGGEROID) 
+  if (type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
          errmsg("pllua functions cannot return type '%s'",
@@ -560,8 +463,7 @@ static void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
     case INT2ARRAYOID:
     case INT4ARRAYOID:
     case INT8ARRAYOID:
-    case TEXTARRAYOID:
-    case ANYARRAYOID: { /* FIXME: anyarray */
+    case TEXTARRAYOID: {
       ArrayType *arr = DatumGetArrayTypeP(dat);
       char *p = ARR_DATA_PTR(arr);
       bits8 *bitmap = ARR_NULLBITMAP(arr);
@@ -768,8 +670,7 @@ static Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
       case INT2ARRAYOID:
       case INT4ARRAYOID:
       case INT8ARRAYOID:
-      case TEXTARRAYOID:
-      case ANYARRAYOID: {
+      case TEXTARRAYOID: {
         FormData_pg_type typeinfo;
         Oid typeelem;
         int ndims, dims[MAXDIM], lb[MAXDIM];
@@ -866,7 +767,11 @@ static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
 
 
 /* TODO:
- *  o server connections
+ *  o server connections:
+ *    * (plan.cursor):rows() -- iterator
+ *    * cursor:move(n), cursor:fetch(n), cursor:close()
+ *  o error msgs: notice, [runtime] tags
+ *  o bpchar
  */
 
 
