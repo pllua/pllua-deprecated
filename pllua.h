@@ -2,7 +2,7 @@
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.2 2007/09/18 22:03:17 carvalho Exp $
+ * $Id: pllua.h,v 1.3 2007/09/20 19:50:00 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -15,6 +15,7 @@
 #include <catalog/pg_type.h>
 #include <commands/trigger.h>
 #include <executor/spi.h>
+#include <parser/parse_type.h>
 #include <utils/memutils.h>
 #include <utils/syscache.h>
 #include <utils/typcache.h>
@@ -23,22 +24,11 @@
 #include <lualib.h>
 #include <lauxlib.h>
 
-#define PLLUA_TUPLEMT "luaP_Tuple"
-
-typedef struct luaP_Tuple {
-  int changed;
-  Oid relid;
-  HeapTuple tuple;
-  TupleDesc desc;
-  Datum *value;
-  bool *null;
-} luaP_Tuple;
-
-/* simple API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
 Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
 void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);
+HeapTuple luaP_totuple (lua_State *L);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 

@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.4 2007/09/18 22:03:17 carvalho Exp $
+ * $Id: pllua.c,v 1.5 2007/09/20 19:50:00 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -23,10 +23,6 @@ typedef struct luaP_Info {
 #define PLLUA_TRIGGERVAR "trigger"
 #define PLLUA_CHUNKNAME "pllua chunk"
 #define PLLUA_VARARG (-1)
-
-#ifdef PG_MODULE_MAGIC
-PG_MODULE_MAGIC;
-#endif
 
 /* from catalog/pg_type.h */
 #define BOOLARRAYOID 1000
@@ -55,6 +51,7 @@ PG_MODULE_MAGIC;
 
 static lua_State *L = NULL; /* Lua VM */
 
+PG_MODULE_MAGIC;
 Datum pllua_call_handler(PG_FUNCTION_ARGS);
 
 /* Trigger */
@@ -117,20 +114,10 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
 }
 
 static Datum luaP_gettriggerresult (lua_State *L) {
-  HeapTuple tuple = NULL;
-  luaP_Tuple *t;
+  HeapTuple tuple;
   lua_getglobal(L, PLLUA_TRIGGERVAR);
   lua_getfield(L, -1, "row");
-  t = (luaP_Tuple *) lua_touserdata(L, -1);
-  if (t != NULL) {
-    if (lua_getmetatable(L, -1)) {
-      lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_TUPLEMT);
-      if (lua_rawequal(L, -1, -2)) /* tuple? */
-        tuple = (t->changed) ? /* create new tuple? */
-          heap_form_tuple(t->desc, t->value, t->null) : t->tuple;
-      lua_pop(L, 2); /* metatables */
-    }
-  }
+  tuple = luaP_totuple(L);
   lua_pop(L, 2);
   return PointerGetDatum(tuple);
 }
@@ -766,11 +753,9 @@ static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
 
 
 /* TODO:
- *  o server connections:
- *    * (plan.cursor):rows() -- iterator
- *    * cursor:move(n), cursor:fetch(n), cursor:close()
  *  o error msgs: notice, [runtime] tags
- *  o bpchar
+ *  o bpchar, numeric (variable)
+ *  o tuple as luaP_Tuple
  */
 
 
@@ -798,7 +783,10 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
       status = lua_pcall(L, nargs, 0, 0);
       if (status) elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
-      retval = luaP_gettriggerresult(L);
+      if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
+          && !TRIGGER_FIRED_BY_DELETE(trigdata->tg_event)
+          && TRIGGER_FIRED_BEFORE(trigdata->tg_event))
+        retval = luaP_gettriggerresult(L);
       luaP_cleantrigger(L);
     }
     else { /* called as function */
