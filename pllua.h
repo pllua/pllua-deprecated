@@ -2,7 +2,7 @@
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.3 2007/09/20 19:50:00 carvalho Exp $
+ * $Id: pllua.h,v 1.4 2007/09/20 21:25:29 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -15,6 +15,7 @@
 #include <catalog/pg_type.h>
 #include <commands/trigger.h>
 #include <executor/spi.h>
+#include <nodes/makefuncs.h>
 #include <parser/parse_type.h>
 #include <utils/memutils.h>
 #include <utils/syscache.h>

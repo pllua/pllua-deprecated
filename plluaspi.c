@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.3 2007/09/20 19:50:00 carvalho Exp $
+ * $Id: plluaspi.c,v 1.4 2007/09/20 21:25:29 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -389,10 +389,11 @@ static int luaP_getcursorplan (lua_State *L) {
 /* ======= SPI ======= */
 
 static Oid luaP_gettypeoid (const char *typename) {
-  List *names = stringToQualifiedNameList(typename, "luaP_prepare");
-  HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(names));
+  List *namelist = stringToQualifiedNameList(typename, NULL);
+  HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist));
   Oid typeoid = HeapTupleGetOid(typetup);
   ReleaseSysCache(typetup);
+  list_free(namelist);
   return typeoid;
 }
 
