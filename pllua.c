@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.5 2007/09/20 19:50:00 carvalho Exp $
+ * $Id: pllua.c,v 1.6 2007/09/20 22:12:46 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -34,13 +34,20 @@ typedef struct luaP_Info {
 #define MaxArraySize ((Size) (MaxAllocSize / sizeof(Datum)))
 
 #define info(msg) ereport(INFO, (errcode(ERRCODE_WARNING), errmsg msg))
-#define warning(msg) ereport(WARNING, (errcode(ERRCODE_WARNING), errmsg msg))
 #define text2string(d) DatumGetCString(DirectFunctionCall1(textout, (d)))
 #define string2text(s) DirectFunctionCall1(textin, CStringGetDatum((s)))
 #define varchar2string(d) DatumGetCString(DirectFunctionCall1(varcharout, (d)))
 #define string2varchar(s, l) \
   DirectFunctionCall3(varcharin, CStringGetDatum((s)), \
       ObjectIdGetDatum(VARCHAROID), Int32GetDatum(VARHDRSZ + (l)))
+#define char2string(d) DatumGetCString(DirectFunctionCall1(bpcharout, (d)))
+#define string2char(s, l) \
+  DirectFunctionCall3(bpcharin, CStringGetDatum((s)), \
+      ObjectIdGetDatum(BPCHAROID), Int32GetDatum(VARHDRSZ + (l)))
+#define numeric2string(n) DatumGetCString(DirectFunctionCall1(numeric_out, (n)))
+#define string2numeric(s, l) \
+  DirectFunctionCall3(numeric_in, CStringGetDatum((s)), \
+      ObjectIdGetDatum(NUMERICOID), Int32GetDatum(VARHDRSZ + (l)))
 
 #define luaP_gettypechar(o) ((luaP_gettypeinfo((o))).typtype)
 #define luaP_gettypeelem(o) ((luaP_gettypeinfo((o))).typelem)
@@ -173,7 +180,13 @@ static int luaP_info (lua_State *L) {
 
 static int luaP_warning (lua_State *L) {
   luaL_checkstring(L, 1);
-  warning((lua_tostring(L, 1)));
+  ereport(WARNING, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
+  return 0;
+}
+
+static int luaP_notice (lua_State *L) {
+  luaL_checkstring(L, 1);
+  ereport(NOTICE, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
   return 0;
 }
 
@@ -181,6 +194,7 @@ static const luaL_Reg luaP_funcs[] = {
   {"setshared", luaP_setshared},
   {"print", luaP_print},
   {"info", luaP_info},
+  {"notice", luaP_notice},
   {"warning", luaP_warning},
   {NULL, NULL}
 };
@@ -425,7 +439,6 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       lua_pushnumber(L, (lua_Number) DatumGetFloat4(dat));
       break;
     case FLOAT8OID:
-    case NUMERICOID:
       lua_pushnumber(L, (lua_Number) DatumGetFloat8(dat));
       break;
     case INT2OID:
@@ -437,8 +450,16 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
     case INT8OID:
       lua_pushinteger(L, (lua_Integer) DatumGetInt64(dat));
       break;
+    case NUMERICOID:
+      lua_pushstring(L, numeric2string(dat));
+      lua_pushnumber(L, lua_tonumber(L, -1));
+      lua_replace(L, -2);
+      break;
     case TEXTOID:
       lua_pushstring(L, text2string(dat));
+      break;
+    case BPCHAROID:
+      lua_pushstring(L, char2string(dat));
       break;
     case VARCHAROID:
       lua_pushstring(L, varchar2string(dat));
@@ -640,16 +661,27 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
       case INT8OID:
         dat = Int64GetDatum(lua_tointeger(L, -1));
         break;
+      case NUMERICOID:
+        if (len <= 0)
+          elog(ERROR, "type '%s' not supported in this context",
+              format_type_be(type));
+        dat = string2numeric(lua_tostring(L, -1), len);
+        break;
       case TEXTOID:
         dat = string2text(lua_tostring(L, -1));
         break;
-      case VARCHAROID: {
+      case BPCHAROID:
+        if (len <= 0)
+          elog(ERROR, "type '%s' not supported in this context",
+              format_type_be(type));
+        dat = string2char(lua_tostring(L, -1), len);
+        break;
+      case VARCHAROID:
         if (len <= 0)
           elog(ERROR, "type '%s' not supported in this context",
               format_type_be(type));
         dat = string2varchar(lua_tostring(L, -1), len);
         break;
-      }
       case BOOLARRAYOID:
       case FLOAT4ARRAYOID:
       case FLOAT8ARRAYOID:
@@ -753,9 +785,7 @@ static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
 
 
 /* TODO:
- *  o error msgs: notice, [runtime] tags
- *  o bpchar, numeric (variable)
- *  o tuple as luaP_Tuple
+ *  o error msgs: [runtime] tags
  */
 
 
