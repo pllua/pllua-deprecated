@@ -1,8 +1,8 @@
 /*
- * pllua.c: PL/Lua call handler, trusted
+ * plluau.c: PL/Lua call handler, untrusted
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.8 2007/09/21 03:20:52 carvalho Exp $
+ * $Id: plluau.c,v 1.1 2007/09/21 03:20:52 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -11,13 +11,13 @@ static lua_State *L = NULL; /* Lua VM */
 
 PG_MODULE_MAGIC;
 
-Datum pllua_call_handler(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(pllua_call_handler);
-Datum pllua_call_handler(PG_FUNCTION_ARGS) {
+Datum plluau_call_handler(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(plluau_call_handler);
+Datum plluau_call_handler(PG_FUNCTION_ARGS) {
   Datum retval = 0;
   luaP_Info *fi = NULL;
   bool istrigger;
-  if (L == NULL) L = luaP_newstate(1); /* trusted */
+  if (L == NULL) L = luaP_newstate(0); /* untrusted */
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
   PG_TRY();

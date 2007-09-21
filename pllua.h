@@ -2,7 +2,7 @@
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.4 2007/09/20 21:25:29 carvalho Exp $
+ * $Id: pllua.h,v 1.5 2007/09/21 03:20:52 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -25,11 +25,33 @@
 #include <lualib.h>
 #include <lauxlib.h>
 
+/* extended function info */
+typedef struct luaP_Info {
+  int oid;
+  int nargs;
+  Oid *arg;
+  Oid result;
+  bool result_isset;
+  lua_State *L; /* thread for SETOF iterator */
+} luaP_Info;
+
+
+lua_State *luaP_newstate (int trusted);
+luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
+    bool istrigger);
+void luaP_pushargs (lua_State *L, FunctionCallInfo fcinfo, luaP_Info *fi);
+Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo, Oid type);
+
+void luaP_preptrigger (lua_State *L, TriggerData *tdata);
+Datum luaP_gettriggerresult (lua_State *L);
+void luaP_cleantrigger (lua_State *L);
+
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
 Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
 void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);
 HeapTuple luaP_totuple (lua_State *L);
+
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 

@@ -1,7 +1,7 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.3 2007/09/18 22:03:17 carvalho Exp $
+# $Id: Makefile,v 1.4 2007/09/21 03:20:52 carvalho Exp $
 
-MODULES = pllua
+MODULES = pllua plluau
 DATA_built = pllua.sql
 PG_CPPFLAGS = -I/usr/include/lua5.1
 
@@ -13,6 +13,9 @@ include $(PGXS)
 	C=`pg_config --pkglibdir`; \
 	sed -e "s:_OBJWD_:$$C:g" < $< > $@
 
-pllua.so : pllua.o plluaspi.o
+pllua.so : pllua.o plluaapi.o plluaspi.o
+	$(CC) -shared -o $@ $^ -llua5.1
+
+plluau.so : plluau.o plluaapi.o plluaspi.o
 	$(CC) -shared -o $@ $^ -llua5.1
 
