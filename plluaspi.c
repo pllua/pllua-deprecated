@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.4 2007/09/20 21:25:29 carvalho Exp $
+ * $Id: plluaspi.c,v 1.5 2007/09/21 02:29:51 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -136,7 +136,7 @@ static int luaP_tuplenewindex (lua_State *L) {
   const char *name = luaL_checkstring(L, 2);
   int i;
   if (t->changed == -1) /* read-only? */
-    luaL_error(L, "tuple is read-only");
+    return luaL_error(L, "tuple is read-only");
   lua_pushinteger(L, (int) t->relid);
   lua_rawget(L, LUA_REGISTRYINDEX);
   lua_getfield(L, -1, name);
@@ -149,7 +149,8 @@ static int luaP_tuplenewindex (lua_State *L) {
     t->null[i] = isnull;
     t->changed = 1;
   }
-  else luaL_error(L, "column not found in relation: '%s'", name);
+  else
+    return luaL_error(L, "column not found in relation: '%s'", name);
   return 0;
 }
 
@@ -341,7 +342,7 @@ static int luaP_executeplan (lua_State *L) {
   else
     result = SPI_execute_plan(p->plan, NULL, NULL, ro, c); 
   if (result < 0)
-    luaL_error(L, "SPI_execute_plan error: %d", result);
+    return luaL_error(L, "SPI_execute_plan error: %d", result);
   luaP_pushtuptable(L, NULL);
   return 1;
 }
@@ -350,8 +351,10 @@ static int luaP_saveplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
   SPI_saveplan(p->plan);
   switch (SPI_result) {
-    case SPI_ERROR_ARGUMENT: luaL_error(L, "null plan to be saved");
-    case SPI_ERROR_UNCONNECTED: luaL_error(L, "unconnected procedure");
+    case SPI_ERROR_ARGUMENT:
+      return luaL_error(L, "null plan to be saved");
+    case SPI_ERROR_UNCONNECTED:
+      return luaL_error(L, "unconnected procedure");
   }
   p->issaved = 1;
   return 0;
@@ -379,7 +382,7 @@ static int luaP_getcursorplan (lua_State *L) {
     else
       cursor = SPI_cursor_open(name, p->plan, NULL, NULL, ro);
     if (cursor == NULL)
-      luaL_error(L, "error opening cursor");
+      return luaL_error(L, "error opening cursor");
     luaP_newcursor(L, cursor);
   }
   return 1;
@@ -419,7 +422,7 @@ static int luaP_prepare (lua_State *L) {
         const char *s = luaL_checkstring(L, -1);
         Oid type = luaP_gettypeoid(s);
         if (type == InvalidOid)
-          luaL_error(L, "invalid type to plan: %s", s);
+          return luaL_error(L, "invalid type to plan: %s", s);
         p->type[k - 1] = type;
       }
       lua_pop(L, 1);
@@ -427,7 +430,7 @@ static int luaP_prepare (lua_State *L) {
   }
   p->plan = SPI_prepare(q, nargs, p->type);
   if (SPI_result < 0)
-    luaL_error(L, "SPI_prepare error: %d", SPI_result);
+    return luaL_error(L, "SPI_prepare error: %d", SPI_result);
   luaL_getmetatable(L, PLLUA_PLANMT);
   lua_setmetatable(L, -2);
   return 1;
@@ -437,7 +440,7 @@ static int luaP_execute (lua_State *L) {
   int result = SPI_execute(luaL_checkstring(L, 1),
       (bool) lua_toboolean(L, 2), luaL_optlong(L, 3, 0));
   if (result < 0)
-    luaL_error(L, "SPI_execute_plan error: %d", result);
+    return luaL_error(L, "SPI_execute_plan error: %d", result);
   luaP_pushtuptable(L, NULL);
   return 1;
 }

@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.6 2007/09/20 22:12:46 carvalho Exp $
+ * $Id: pllua.c,v 1.7 2007/09/21 02:29:51 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -72,7 +72,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   else if (TRIGGER_FIRED_AFTER(tdata->tg_event))
     lua_pushstring(L, "after");
   else
-    elog(ERROR, "unknown trigger 'when' event");
+    elog(ERROR, "[pllua]: unknown trigger 'when' event");
   lua_setfield(L, -2, "when");
   /* level */
   if (TRIGGER_FIRED_FOR_ROW(tdata->tg_event))
@@ -80,7 +80,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   else if (TRIGGER_FIRED_FOR_STATEMENT(tdata->tg_event))
     lua_pushstring(L, "statement");
   else
-    elog(ERROR, "unknown trigger 'level' event");
+    elog(ERROR, "[pllua]: unknown trigger 'level' event");
   lua_setfield(L, -2, "level");
   /* operation */
   if (TRIGGER_FIRED_BY_INSERT(tdata->tg_event))
@@ -90,7 +90,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   else if (TRIGGER_FIRED_BY_DELETE(tdata->tg_event))
     lua_pushstring(L, "delete");
   else
-    elog(ERROR, "unknown trigger 'operation' event");
+    elog(ERROR, "[pllua]: unknown trigger 'operation' event");
   lua_setfield(L, -2, "operation");
   /* relation (name) */
   relname = NameStr(tdata->tg_relation->rd_rel->relname);
@@ -160,7 +160,8 @@ static int luaP_print (lua_State *L) {
     lua_pushvalue(L, i); /* arg */
     lua_call(L, 1, 1);
     s = lua_tostring(L, -1);
-    if (s == NULL) return luaL_error(L, "cannot convert to string");
+    if (s == NULL)
+      return luaL_error(L, "[pllua]: cannot convert to string");
     if (i > 1) luaL_addchar(&b, '\t');
     luaL_addlstring(&b, s, strlen(s));
     lua_pop(L, 1);
@@ -215,7 +216,7 @@ static lua_State *luaP_newstate (void) {
   const luaL_Reg *reg = luaP_libs;
   const char **s;
   L = lua_open();
-  if (L == NULL) elog(ERROR, "cannot allocate Lua VM");
+  if (L == NULL) elog(ERROR, "[pllua]: cannot allocate Lua VM");
   for (; reg->func; reg++) {
     lua_pushcfunction(L, reg->func);
     lua_pushstring(L, reg->name);
@@ -257,7 +258,7 @@ static FormData_pg_type luaP_gettypeinfo (Oid typeoid) {
   FormData_pg_type typeinfo;
   type = SearchSysCache(TYPEOID, ObjectIdGetDatum(typeoid), 0, 0, 0);
   if (!HeapTupleIsValid(type))
-    elog(ERROR, "cache lookup failed for type %u", typeoid);
+    elog(ERROR, "[pllua]: cache lookup failed for type %u", typeoid);
   typeinfo = *((Form_pg_type) GETSTRUCT(type));
   ReleaseSysCache(type);
   return typeinfo;
@@ -287,7 +288,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, FunctionCallInfo fcinfo,
     if (type == 'p') /* pseudo-type? */
       ereport(ERROR,
           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-           errmsg("pllua functions cannot take type '%s'",
+           errmsg("[pllua]: functions cannot take type '%s'",
           format_type_be(argtype[i]))));
     fi->arg[i] = argtype[i];
   }
@@ -296,12 +297,12 @@ static luaP_Info *luaP_newinfo (lua_State *L, FunctionCallInfo fcinfo,
       || (rettype != TRIGGEROID && istrigger))
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-         errmsg("trigger function can only be called as trigger")));
+         errmsg("[pllua]: trigger function can only be called as trigger")));
   type = luaP_gettypechar(rettype);
   if (type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-         errmsg("pllua functions cannot return type '%s'",
+         errmsg("[pllua]: functions cannot return type '%s'",
            format_type_be(rettype))));
   fi->result = rettype;
   fi->result_isset = isset;
@@ -328,11 +329,11 @@ static luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
     proc = SearchSysCache(PROCOID, ObjectIdGetDatum(fcinfo->flinfo->fn_oid),
         0, 0, 0);
     if (!HeapTupleIsValid(proc))
-      elog(ERROR, "cache lookup failed for function %u",
+      elog(ERROR, "[pllua]: cache lookup failed for function %u",
           fcinfo->flinfo->fn_oid);
     procst = (Form_pg_proc) GETSTRUCT(proc);
     prosrc = SysCacheGetAttr(PROCOID, proc, Anum_pg_proc_prosrc, &isnull);
-    if (isnull) elog(ERROR, "null prosrc");
+    if (isnull) elog(ERROR, "[pllua]: null prosrc");
     /* get info userdata */
     lua_pushinteger(L, oid);
     fi = luaP_newinfo(L, fcinfo, procst, istrigger);
@@ -342,7 +343,7 @@ static luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
       int nnames;
       Datum argnames = SysCacheGetAttr(PROCOID, proc,
           Anum_pg_proc_proargnames, &isnull);
-      if (isnull) elog(ERROR, "null argnames");
+      if (isnull) elog(ERROR, "[pllua]: null argnames");
       deconstruct_array(DatumGetArrayTypeP(argnames), TEXTOID, -1, false,
           'i', &argname, NULL, &nnames);
       if (nnames != fcinfo->nargs) fi->nargs = PLLUA_VARARG;
@@ -484,7 +485,7 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
     default: {
       TupleDesc tupdesc = luaP_gettupledesc(type);
       if (tupdesc == NULL) /* not a tuple? */
-        elog(ERROR, "type '%s' (%d) not supported as argument",
+        elog(ERROR, "[pllua]: type '%s' (%d) not supported as argument",
             format_type_be(type), type);
       else {
         HeapTupleHeader tup = DatumGetHeapTupleHeader(dat);
@@ -549,7 +550,7 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
       if (lua_type(L, -1) == LUA_TTABLE) {
         int d = -1, l = -1;
         if (*ndims == MAXDIM)
-          elog(ERROR, "table exceeds max number of dimensions");
+          elog(ERROR, "[pllua]: table exceeds max number of dimensions");
         if (*ndims > 1) {
           d = dims[1]; l = lb[1];
         }
@@ -575,11 +576,11 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
         size = att_addlength(size, typeinfo->typlen, v);
         size = att_align(size, typeinfo->typalign);
         if (size > MaxAllocSize)
-          elog(ERROR, "array size exceeds the maximum allowed");
+          elog(ERROR, "[pllua]: array size exceeds the maximum allowed");
       }
       n++;
       if (*ndims < 0) *ndims = n;
-      else if (*ndims != n) elog(ERROR, "table is asymetric");
+      else if (*ndims != n) elog(ERROR, "[pllua]: table is asymetric");
     }
     nitems++;
     lua_pop(L, 1);
@@ -615,7 +616,8 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
         if (!typeinfo->typbyval) pfree(DatumGetPointer(v));
       }
       else
-        if (!(*bitmap)) elog(ERROR, "no support for null elements");
+        if (!(*bitmap))
+          elog(ERROR, "[pllua]: no support for null elements");
       if (*bitmap) {
         *bitmask <<= 1;
         if (*bitmask == 0x100) {
@@ -663,7 +665,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
         break;
       case NUMERICOID:
         if (len <= 0)
-          elog(ERROR, "type '%s' not supported in this context",
+          elog(ERROR, "[pllua]: type '%s' not supported in this context",
               format_type_be(type));
         dat = string2numeric(lua_tostring(L, -1), len);
         break;
@@ -672,13 +674,13 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
         break;
       case BPCHAROID:
         if (len <= 0)
-          elog(ERROR, "type '%s' not supported in this context",
+          elog(ERROR, "[pllua]: type '%s' not supported in this context",
               format_type_be(type));
         dat = string2char(lua_tostring(L, -1), len);
         break;
       case VARCHAROID:
         if (len <= 0)
-          elog(ERROR, "type '%s' not supported in this context",
+          elog(ERROR, "[pllua]: type '%s' not supported in this context",
               format_type_be(type));
         dat = string2varchar(lua_tostring(L, -1), len);
         break;
@@ -695,7 +697,8 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
         int i, size;
         bool hasnulls;
         if (lua_type(L, -1) != LUA_TTABLE)
-          elog(ERROR, "table expected");
+          elog(ERROR, "[pllua]: table expected for array conversion, got %s",
+              lua_typename(L, lua_type(L, -1)));
         typeelem = luaP_gettypeelem(type);
         typeinfo = luaP_gettypeinfo(typeelem);
         for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = -1;
@@ -714,7 +717,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
           for (i = 0; i < ndims; i++) {
             nitems *= dims[i];
             if (nitems > MaxArraySize)
-              elog(ERROR, "array size exceeds maximum allowed");
+              elog(ERROR, "[pllua]: array size exceeds maximum allowed");
           }
           if (hasnulls) {
             offset = ARR_OVERHEAD_WITHNULLS(ndims, nitems);
@@ -742,14 +745,14 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
       default: {
         TupleDesc typedesc = luaP_gettupledesc(type);
         if (typedesc == NULL)
-          elog(ERROR, "type '%s' not supported as result",
+          elog(ERROR, "[pllua]: type '%s' not supported as result",
               format_type_be(type));
         else {
           int i;
           Datum *values;
           bool *nulls;
           if (lua_type(L, -1) != LUA_TTABLE)
-            elog(ERROR, "table expected for record result, got %s",
+            elog(ERROR, "[pllua]: table expected for record result, got %s",
                 lua_typename(L, lua_type(L, -1)));
           /* create tuple */
           values = palloc(typedesc->natts * sizeof(Datum));
@@ -784,22 +787,15 @@ static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
 }
 
 
-/* TODO:
- *  o error msgs: [runtime] tags
- */
-
-
 /* call handler */
 PG_FUNCTION_INFO_V1(pllua_call_handler);
 Datum pllua_call_handler(PG_FUNCTION_ARGS) {
   Datum retval = 0;
   luaP_Info *fi = NULL;
-  int status;
   bool istrigger;
   if (L == NULL) L = luaP_newstate();
-  if (L == NULL) elog(ERROR, "cannot initialize Lua state");
   if (SPI_connect() != SPI_OK_CONNECT)
-    elog(ERROR, "could not connect to SPI manager");
+    elog(ERROR, "[pllua]: could not connect to SPI manager");
   PG_TRY();
   {
     istrigger = CALLED_AS_TRIGGER(fcinfo);
@@ -811,8 +807,8 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
       nargs = trigdata->tg_trigger->tgnargs;
       for (i = 0; i < nargs; i++) /* push args */
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
-      status = lua_pcall(L, nargs, 0, 0);
-      if (status) elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
+      if (lua_pcall(L, nargs, 0, 0))
+        elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
           && !TRIGGER_FIRED_BY_DELETE(trigdata->tg_event)
           && TRIGGER_FIRED_BEFORE(trigdata->tg_event))
@@ -821,6 +817,7 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
     }
     else { /* called as function */
       if (fi->result_isset) { /* SETOF? */
+        int status;
         ReturnSetInfo *rsi = (ReturnSetInfo *) fcinfo->resultinfo;
         if (fi->L == NULL) { /* first call? */
           if (!rsi || !IsA(rsi, ReturnSetInfo)
@@ -856,8 +853,8 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
       }
       else {
         luaP_pushargs(L, fcinfo, fi);
-        status = lua_pcall(L, fcinfo->nargs, 1, 0);
-        if (status) elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
+        if (lua_pcall(L, fcinfo->nargs, 1, 0))
+          elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
         retval = luaP_getresult(L, fcinfo, fi->result);
       }
     }
@@ -880,7 +877,7 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
   }
   PG_END_TRY();
   if (SPI_finish() != SPI_OK_FINISH)
-    elog(ERROR, "could not disconnect from SPI manager");
+    elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   return retval;
 }
 
