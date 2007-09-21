@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.2 2007/09/21 03:38:01 carvalho Exp $
+ * $Id: plluaapi.c,v 1.3 2007/09/21 04:33:24 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -34,7 +34,8 @@ typedef struct luaP_Info {
 
 #define MaxArraySize ((Size) (MaxAllocSize / sizeof(Datum)))
 
-#define info(msg) ereport(INFO, (errcode(ERRCODE_WARNING), errmsg msg))
+#define info(msg) ereport(INFO, \
+    (errcode(ERRCODE_SUCCESSFUL_COMPLETION), errmsg msg))
 #define text2string(d) DatumGetCString(DirectFunctionCall1(textout, (d)))
 #define string2text(s) DirectFunctionCall1(textin, CStringGetDatum((s)))
 #define varchar2string(d) DatumGetCString(DirectFunctionCall1(varcharout, (d)))
@@ -52,6 +53,10 @@ typedef struct luaP_Info {
 
 #define luaP_gettypechar(o) ((luaP_gettypeinfo((o))).typtype)
 #define luaP_gettypeelem(o) ((luaP_gettypeinfo((o))).typelem)
+#define luaP_error(L, tag) \
+        ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
+             errmsg("[pllua]: " tag " error"), \
+             errdetail("%s", lua_tostring((L), -1))))
 
 /* ======= Trigger ======= */
 
@@ -131,8 +136,8 @@ static void luaP_cleantrigger (lua_State *L) {
 /* ======= luaP_newstate: create a new Lua VM ======= */
 
 static int luaP_globalnewindex (lua_State *L) {
-  elog(ERROR, "[pllua]: attempt to set global var '%s'", lua_tostring(L, -2));
-  return 0;
+  return luaL_error(L, "attempt to set global var '%s'",
+      lua_tostring(L, -2));
 }
 
 static int luaP_setshared (lua_State *L) {
@@ -178,15 +183,16 @@ static int luaP_info (lua_State *L) {
   return 0;
 }
 
-static int luaP_warning (lua_State *L) {
+static int luaP_notice (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(WARNING, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
+  ereport(NOTICE, (errcode(ERRCODE_SUCCESSFUL_COMPLETION),
+        errmsg(lua_tostring(L, 1))));
   return 0;
 }
 
-static int luaP_notice (lua_State *L) {
+static int luaP_warning (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(NOTICE, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
+  ereport(WARNING, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
   return 0;
 }
 
@@ -232,13 +238,6 @@ lua_State *luaP_newstate (int trusted) {
     }
     lua_setglobal(L, LUA_OSLIBNAME);
     lua_pop(L, 2);
-    /* _G metatable */
-    lua_createtable(L, 0, 1);
-    lua_pushcfunction(L, luaP_globalnewindex);
-    lua_setfield(L, -2, "__newindex");
-    lua_pushvalue(L, -1); /* metatable */
-    lua_setfield(L, -2, "__metatable");
-    lua_setmetatable(L, LUA_GLOBALSINDEX);
   }
   else luaL_openlibs(L);
   /* set alias for _G */
@@ -249,9 +248,17 @@ lua_State *luaP_newstate (int trusted) {
   luaL_register(L, NULL, luaP_funcs);
   lua_pop(L, 1);
   /* SPI */
-  lua_pushstring(L, PLLUA_SPIVAR);
   luaP_registerspi(L);
-  lua_rawset(L, LUA_GLOBALSINDEX);
+  lua_setglobal(L, PLLUA_SPIVAR);
+  /* _G metatable */
+  if (trusted) { /* set _G as read-only? */
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, luaP_globalnewindex);
+    lua_setfield(L, -2, "__newindex");
+    lua_pushvalue(L, -1); /* metatable */
+    lua_setfield(L, -2, "__metatable");
+    lua_setmetatable(L, LUA_GLOBALSINDEX);
+  }
   return L;
 }
 
@@ -325,7 +332,6 @@ static luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
     HeapTuple proc;
     Form_pg_proc procst;
     bool isnull;
-    int status;
     Datum prosrc, *argname;
     const char *s, *fname;
     luaL_Buffer b;
@@ -384,8 +390,8 @@ static luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
     /* create function */
     luaL_pushresult(&b);
     s = lua_tostring(L, -1);
-    status = luaL_loadbuffer(L, s, strlen(s), PLLUA_CHUNKNAME);
-    if (status) elog(ERROR, "[compile]: %s", lua_tostring(L, -1));
+    if (luaL_loadbuffer(L, s, strlen(s), PLLUA_CHUNKNAME))
+      luaP_error(L, "compile");
     lua_remove(L, -2); /* source */
     lua_call(L, 0, 1);
     lua_pushvalue(L, -1); /* func */
@@ -813,7 +819,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
       for (i = 0; i < nargs; i++) /* push args */
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
       if (lua_pcall(L, nargs, 0, 0))
-        elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
+        luaP_error(L, "runtime");
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
           && !TRIGGER_FIRED_BY_DELETE(trigdata->tg_event)
           && TRIGGER_FIRED_BEFORE(trigdata->tg_event))
@@ -853,13 +859,12 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
           fcinfo->isnull = true;
           retval = (Datum) 0;
         }
-        else
-          elog(ERROR, "[runtime]: %s", lua_tostring(fi->L, -1));
+        else luaP_error(fi->L, "runtime");
       }
       else {
         luaP_pushargs(L, fcinfo, fi);
         if (lua_pcall(L, fcinfo->nargs, 1, 0))
-          elog(ERROR, "[runtime]: %s", lua_tostring(L, -1));
+          luaP_error(L, "runtime");
         retval = luaP_getresult(L, fcinfo, fi->result);
       }
     }
