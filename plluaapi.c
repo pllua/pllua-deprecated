@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.3 2007/09/21 04:33:24 carvalho Exp $
+ * $Id: plluaapi.c,v 1.4 2007/09/22 17:26:22 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -57,6 +57,7 @@ typedef struct luaP_Info {
         ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
              errmsg("[pllua]: " tag " error"), \
              errdetail("%s", lua_tostring((L), -1))))
+
 
 /* ======= Trigger ======= */
 
@@ -165,7 +166,7 @@ static int luaP_print (lua_State *L) {
     lua_call(L, 1, 1);
     s = lua_tostring(L, -1);
     if (s == NULL)
-      return luaL_error(L, "[pllua]: cannot convert to string");
+      return luaL_error(L, "cannot convert to string");
     if (i > 1) luaL_addchar(&b, '\t');
     luaL_addlstring(&b, s, strlen(s));
     lua_pop(L, 1);
@@ -192,7 +193,8 @@ static int luaP_notice (lua_State *L) {
 
 static int luaP_warning (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(WARNING, (errcode(ERRCODE_WARNING), errmsg(lua_tostring(L, 1))));
+  ereport(WARNING, (errcode(ERRCODE_WARNING),
+        errmsg(lua_tostring(L, 1))));
   return 0;
 }
 
@@ -205,24 +207,22 @@ static const luaL_Reg luaP_funcs[] = {
   {NULL, NULL}
 };
 
-static const luaL_Reg luaP_trusted_libs[] = {
-  {"", luaopen_base},
-  {LUA_TABLIBNAME, luaopen_table},
-  {LUA_STRLIBNAME, luaopen_string},
-  {LUA_MATHLIBNAME, luaopen_math},
-  {LUA_OSLIBNAME, luaopen_os}, /* restricted */
-  {NULL, NULL}
-};
-
-static const char *os_funcs[] = {"date", "time", "difftime", NULL};
-
 lua_State *luaP_newstate (int trusted) {
   lua_State *L;
-  const char **s;
   L = lua_open();
   if (L == NULL) elog(ERROR, "[pllua]: cannot allocate Lua VM");
   if (trusted) {
+    const luaL_Reg luaP_trusted_libs[] = {
+      {"", luaopen_base},
+      {LUA_TABLIBNAME, luaopen_table},
+      {LUA_STRLIBNAME, luaopen_string},
+      {LUA_MATHLIBNAME, luaopen_math},
+      {LUA_OSLIBNAME, luaopen_os}, /* restricted */
+      {NULL, NULL}
+    };
+    const char *os_funcs[] = {"date", "time", "difftime", NULL};
     const luaL_Reg *reg = luaP_trusted_libs;
+    const char **s = os_funcs;
     for (; reg->func; reg++) {
       lua_pushcfunction(L, reg->func);
       lua_pushstring(L, reg->name);
@@ -231,7 +231,6 @@ lua_State *luaP_newstate (int trusted) {
     /* restricted os lib */
     lua_getglobal(L, LUA_OSLIBNAME);
     lua_newtable(L); /* new os */
-    s = os_funcs;
     for (; *s; s++) {
       lua_getfield(L, -2, *s);
       lua_setfield(L, -2, *s);
@@ -239,7 +238,8 @@ lua_State *luaP_newstate (int trusted) {
     lua_setglobal(L, LUA_OSLIBNAME);
     lua_pop(L, 2);
   }
-  else luaL_openlibs(L);
+  else
+    luaL_openlibs(L);
   /* set alias for _G */
   lua_pushvalue(L, LUA_GLOBALSINDEX);
   lua_setglobal(L, PLLUA_SHAREDVAR); /* _G.shared = _G */
