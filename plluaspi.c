@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.6 2007/09/22 17:26:22 carvalho Exp $
+ * $Id: plluaspi.c,v 1.7 2007/11/08 14:56:29 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -14,9 +14,6 @@
 #define PLLUA_PLANMT "luaP_Plan"
 #define PLLUA_CURSORMT "luaP_Cursor"
 #define PLLUA_TUPTABLEMT "luaP_Tuptable"
-
-/* FIXME */
-#define info(msg) ereport(INFO, (errcode(ERRCODE_WARNING), errmsg msg))
 
 typedef struct luaP_Buffer {
   int size;

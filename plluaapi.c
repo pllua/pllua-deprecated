@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.4 2007/09/22 17:26:22 carvalho Exp $
+ * $Id: plluaapi.c,v 1.5 2007/11/08 14:56:29 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -207,10 +207,27 @@ static const luaL_Reg luaP_funcs[] = {
   {NULL, NULL}
 };
 
-lua_State *luaP_newstate (int trusted) {
-  lua_State *L;
-  L = lua_open();
-  if (L == NULL) elog(ERROR, "[pllua]: cannot allocate Lua VM");
+static void *luaP_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
+  (void) osize; /* not used */
+  if (nsize == 0) {
+    if (ptr != NULL) pfree(ptr);
+    return NULL;
+  }
+  else {
+    if (ptr != NULL)
+      return repalloc(ptr, nsize);
+    else {
+      void *a;
+      MemoryContext m = MemoryContextSwitchTo((MemoryContext) ud);
+      a = palloc(nsize);
+      MemoryContextSwitchTo(m);
+      return a;
+    }
+  }
+}
+
+lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
+  lua_State *L = lua_newstate(luaP_alloc, (void *) memctxt);
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
       {"", luaopen_base},
