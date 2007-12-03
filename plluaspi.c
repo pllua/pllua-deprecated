@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.7 2007/11/08 14:56:29 carvalho Exp $
+ * $Id: plluaspi.c,v 1.8 2007/12/03 15:58:31 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -113,8 +113,7 @@ static int luaP_tupleindex (lua_State *L) {
   if (i >= 0) {
     if (t->changed == -1) { /* read-only? */
       bool isnull;
-      Datum v;
-      v = heap_getattr(t->tuple, t->desc->attrs[i]->attnum, t->desc, &isnull);
+      Datum v = heap_getattr(t->tuple, t->desc->attrs[i]->attnum, t->desc, &isnull);
       if (!isnull)
         luaP_pushdatum(L, v, t->desc->attrs[i]->atttypid);
       else lua_pushnil(L);

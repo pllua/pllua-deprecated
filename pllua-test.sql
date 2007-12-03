@@ -31,7 +31,7 @@ create function rpower (alpha int) returns int as $$
   end
   return n -- failsafe
 end
-do upvalue = upvalue or {} -- cache
+do upvalue = {} -- cache
 $$ language pllua;
 
 create function hpower (alpha int, n int) returns text as $$
@@ -97,27 +97,37 @@ create function dist (g text, f text, t text, s int, d int) returns int as $$
 $$ language pllua;
 
 
+-- tree traversal
+-- note: the lesson here is: always instantiate results from queries, such as
+-- tupletables!
+create table tree (id int, l int, r int);
+insert into tree values (1, 2, 3);
+insert into tree values (2, 4, 5);
+
 create function preorder (t text, s int) returns setof int as $$
-  local r = server.execute("select * from "..t.." where id="..s, true, 1)
-  if r ~= nil then
-    local r = r[1]
-    if r.l ~= nil then preorder(t, r.l) end
-    if r.r ~= nil then preorder(t, r.r) end
+  local q = server.execute("select * from "..t.." where id="..s, true, 1)
+  if q ~= nil then
+    local l, r = q[1].l, q[1].r
+    if l ~= nil then preorder(t, l) end
+    if r ~= nil then preorder(t, r) end
   end
   coroutine.yield(s)
 $$ language pllua;
 
 create function postorder (t text, s int) returns setof int as $$
   coroutine.yield(s)
-  local r = server.execute("select * from "..t.." where id="..s, true, 1)
-  if r ~= nil then
-    local r = r[1]
-    if r.l ~= nil then postorder(t, r.l) end
-    if r.r ~= nil then postorder(t, r.r) end
+  local q = server.execute("select * from "..t.." where id="..s, true, 1)
+  if q ~= nil then
+    local l, r = q[1].l, q[1].r
+    if l ~= nil then postorder(t, l) end
+    if r ~= nil then postorder(t, r) end
   end
 $$ language pllua;
 
+
 -- tests
+
+create type greeting as (how text, who text);
 
 create function greetingset (how text, who text[])
     returns setof greeting as $$
@@ -224,3 +234,78 @@ upvalue = function(n, a)
   end
 $$ language pllua;
 
+
+-- test suite
+create function hello () returns text as $$
+  return "Hello!"
+$$ language pllua;
+
+create function counter () returns int as $$
+  upvalue = upvalue + 1
+  return upvalue
+end
+do upvalue = 0
+$$ language pllua;
+
+create function global1 () returns text as $$
+  if shared.test == nil then
+    setshared("test", "set by global1")
+  end
+  return "shared.test = " .. shared.test
+$$ language pllua;
+
+create function global2 () returns text as $$
+  if shared.test == nil then
+    setshared("test", "set by global2")
+  end
+  return "shared.test = " .. shared.test
+$$ language pllua;
+
+create function lua_require (m text) returns void as $$
+  require(m)
+$$ language plluau;
+
+create function lua_md5 (t text) returns text as $$
+  upvalue:reset()
+  upvalue:update(t)
+  return upvalue:digest()
+end
+do upvalue = require"md5".new()
+$$ language plluau;
+
+create table people (name text, lname text);
+insert into people values ('Roberto', 'Ierusalimschy');
+insert into people values ('Luiz', 'de Figueiredo');
+
+create function md5people (p people) returns text as $$
+  local s = p.name .. " " .. p.lname
+  upvalue:reset()
+  upvalue:update(s)
+  return s .. " => " .. upvalue:digest()
+end
+do upvalue = require"md5".new()
+$$ language plluau;
+
+create function argpeople (p people, f1 text, f2 text) returns text as $$
+  local r = {}
+  local t = {f1, f2}
+  for k, v in pairs(p) do
+    r[#r + 1] = string.format("%s: %s", k, v)
+  end
+  t[3] = "{ " .. table.concat(r, ", ") .. " }"
+  return table.concat(t, " | ")
+$$ language pllua;
+
+create function nested1 (a text) returns text as $$
+  local r = server.execute(string.format("select nested2('%s') as name", a))
+  return r[1].name
+$$ language pllua;
+
+create function nested2 (a text) returns text as $$
+  local r = server.execute(string.format("select nested3('%s') as name", a))
+  return r[1].name
+$$ language pllua;
+
+create function nested3 (a text) returns text as $$
+  return a
+$$ language pllua;

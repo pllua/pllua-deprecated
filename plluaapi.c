@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.5 2007/11/08 14:56:29 carvalho Exp $
+ * $Id: plluaapi.c,v 1.6 2007/12/03 15:58:31 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -24,6 +24,7 @@ typedef struct luaP_Info {
 #define PLLUA_TRIGGERVAR "trigger"
 #define PLLUA_CHUNKNAME "pllua chunk"
 #define PLLUA_VARARG (-1)
+#define PLLUA_INITQRY "select module from pllua.init"
 
 /* from catalog/pg_type.h */
 #define BOOLARRAYOID 1000
@@ -136,6 +137,39 @@ static void luaP_cleantrigger (lua_State *L) {
 
 /* ======= luaP_newstate: create a new Lua VM ======= */
 
+static int luaP_modinit (lua_State *L) {
+  int status;
+  if (SPI_connect() != SPI_OK_CONNECT)
+    elog(ERROR, "[pllua]: could not connect to SPI manager");
+  status = SPI_execute(PLLUA_INITQRY, 1, 0);
+  if (status < 0)
+    lua_pushfstring(L, "[pllua]: error loading modules from pllua.init: %d",
+        status);
+  else {
+    status = 0;
+    if (SPI_processed > 0) { /* any rows? */
+      int i;
+      for (i = 0; i < SPI_processed; i++) {
+        bool isnull;
+        /* push module name */
+        lua_pushstring(L, text2string(heap_getattr(SPI_tuptable->vals[i],
+            1, SPI_tuptable->tupdesc, &isnull))); /* first column */
+        lua_getfield(L, LUA_GLOBALSINDEX, "require");
+        lua_pushvalue(L, -2); /* module name */
+        status = lua_pcall(L, 1, 1, 0);
+        if (status) break; /* error? */
+        if (!lua_isnil(L, -1)) /* make sure global table is set? */
+          lua_rawset(L, LUA_GLOBALSINDEX);
+        else
+          lua_pop(L, 1); /* module name */
+      }
+    }
+  }
+  if (SPI_finish() != SPI_OK_FINISH)
+    elog(ERROR, "[pllua]: could not disconnect from SPI manager");
+  return status;
+}
+
 static int luaP_globalnewindex (lua_State *L) {
   return luaL_error(L, "attempt to set global var '%s'",
       lua_tostring(L, -2));
@@ -227,6 +261,7 @@ static void *luaP_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
 }
 
 lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
+  int status;
   lua_State *L = lua_newstate(luaP_alloc, (void *) memctxt);
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
@@ -235,6 +270,7 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
       {LUA_STRLIBNAME, luaopen_string},
       {LUA_MATHLIBNAME, luaopen_math},
       {LUA_OSLIBNAME, luaopen_os}, /* restricted */
+      {LUA_LOADLIBNAME, luaopen_package}, /* just for pllua.init modules */
       {NULL, NULL}
     };
     const char *os_funcs[] = {"date", "time", "difftime", NULL};
@@ -257,6 +293,10 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
   }
   else
     luaL_openlibs(L);
+  /* load pllua.init modules */
+  status = luaP_modinit(L);
+  if (status != 0) /* SPI or module loading error? */
+    elog(ERROR, lua_tostring(L, -1));
   /* set alias for _G */
   lua_pushvalue(L, LUA_GLOBALSINDEX);
   lua_setglobal(L, PLLUA_SHAREDVAR); /* _G.shared = _G */
@@ -268,7 +308,15 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
   /* _G metatable */
-  if (trusted) { /* set _G as read-only? */
+  if (trusted) {
+    /* clean package module */
+    lua_pushnil(L);
+    lua_setfield(L, LUA_GLOBALSINDEX, "package");
+    lua_pushnil(L);
+    lua_setfield(L, LUA_GLOBALSINDEX, "require");
+    lua_pushnil(L);
+    lua_setfield(L, LUA_GLOBALSINDEX, "module");
+    /* set _G as read-only */
     lua_createtable(L, 0, 1);
     lua_pushcfunction(L, luaP_globalnewindex);
     lua_setfield(L, -2, "__newindex");
@@ -380,7 +428,7 @@ static luaP_Info *luaP_pushfunction (lua_State *L, FunctionCallInfo fcinfo,
     luaL_buffinit(L, &b);
     /* read func name */
     fname = NameStr(procst->proname);
-    /* prepare header: "local upvalue, f f=function(" */
+    /* prepare header: "local upvalue,f f=function(" */
     luaL_addlstring(&b, "local " PLLUA_LOCALVAR ",", 7 + PLLUA_LOCALVARSZ);
     luaL_addlstring(&b, fname, strlen(fname));
     luaL_addchar(&b, ' ');
