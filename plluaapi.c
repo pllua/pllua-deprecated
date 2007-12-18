@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.6 2007/12/03 15:58:31 carvalho Exp $
+ * $Id: plluaapi.c,v 1.7 2007/12/18 03:34:40 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -218,6 +218,13 @@ static int luaP_info (lua_State *L) {
   return 0;
 }
 
+static int luaP_log (lua_State *L) {
+  luaL_checkstring(L, 1);
+  ereport(LOG, (errcode(ERRCODE_SUCCESSFUL_COMPLETION),
+        errmsg(lua_tostring(L, 1))));
+  return 0;
+}
+
 static int luaP_notice (lua_State *L) {
   luaL_checkstring(L, 1);
   ereport(NOTICE, (errcode(ERRCODE_SUCCESSFUL_COMPLETION),
@@ -234,6 +241,7 @@ static int luaP_warning (lua_State *L) {
 
 static const luaL_Reg luaP_funcs[] = {
   {"setshared", luaP_setshared},
+  {"log", luaP_log},
   {"print", luaP_print},
   {"info", luaP_info},
   {"notice", luaP_notice},
@@ -273,7 +281,7 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
       {LUA_LOADLIBNAME, luaopen_package}, /* just for pllua.init modules */
       {NULL, NULL}
     };
-    const char *os_funcs[] = {"date", "time", "difftime", NULL};
+    const char *os_funcs[] = {"date", "clock", "time", "difftime", NULL};
     const luaL_Reg *reg = luaP_trusted_libs;
     const char **s = os_funcs;
     for (; reg->func; reg++) {

@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.8 2007/12/03 15:58:31 carvalho Exp $
+ * $Id: plluaspi.c,v 1.9 2007/12/18 03:34:40 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -363,7 +363,7 @@ static int luaP_executeplan (lua_State *L) {
     result = SPI_execute_plan(p->plan, NULL, NULL, ro, c); 
   if (result < 0)
     return luaL_error(L, "SPI_execute_plan error: %d", result);
-  if (SPI_processed > 0) /* any rows? */
+  if (result == SPI_OK_SELECT && SPI_processed > 0) /* any rows? */
     luaP_pushtuptable(L, NULL);
   else
     lua_pushnil(L);
@@ -380,7 +380,7 @@ static int luaP_saveplan (lua_State *L) {
       return luaL_error(L, "unconnected procedure");
   }
   p->issaved = 1;
-  return 0;
+  return 1;
 }
 
 static int luaP_issavedplan (lua_State *L) {
@@ -465,7 +465,7 @@ static int luaP_execute (lua_State *L) {
       (bool) lua_toboolean(L, 2), luaL_optlong(L, 3, 0));
   if (result < 0)
     return luaL_error(L, "SPI_execute_plan error: %d", result);
-  if (SPI_processed > 0) /* any rows? */
+  if (result == SPI_OK_SELECT && SPI_processed > 0) /* any rows? */
     luaP_pushtuptable(L, NULL);
   else
     lua_pushnil(L);

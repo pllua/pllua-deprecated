@@ -97,31 +97,99 @@ create function dist (g text, f text, t text, s int, d int) returns int as $$
 $$ language pllua;
 
 
--- tree traversal
--- note: the lesson here is: always instantiate results from queries, such as
--- tupletables!
-create table tree (id int, l int, r int);
-insert into tree values (1, 2, 3);
-insert into tree values (2, 4, 5);
+-- Note: global environment should be used only for shared values!
+-- Note: triggers don't return, but read trigger.row for returned value
 
-create function preorder (t text, s int) returns setof int as $$
-  local q = server.execute("select * from "..t.." where id="..s, true, 1)
-  if q ~= nil then
-    local l, r = q[1].l, q[1].r
-    if l ~= nil then preorder(t, l) end
-    if r ~= nil then preorder(t, r) end
+-- tree traversal
+create table tree (id int primary key, lchild int, rchild int);
+
+-- operations only on leaves
+create function treetrigger() returns trigger as $$
+  local row, operation = trigger.row, trigger.operation
+  if operation == "update" then
+    trigger.row = nil -- updates not allowed
+  else
+    local id, lchild, rchild = row.id, row.lchild, row.rchild
+    -- check input consistency
+    if lchild == rchild or id == lchild or id == rchild -- avoid loops
+        or (lchild ~= nil and upvalue.intree(lchild)) -- avoid cycles
+        or (rchild ~= nil and upvalue.intree(rchild))
+        -- operate on leaves only:
+        or (operation == "insert" and not upvalue.emptytree()
+          and not upvalue.isleaf(id)) -- not leaf?
+        or (operation == "delete"
+          and not upvalue.isleafparent(id)) then -- not both leaf parent?
+      trigger.row = nil
+    end
   end
-  coroutine.yield(s)
+end
+do upvalue = { -- cache plans
+  emptytree = function()
+    local p = server.prepare("select * from tree"):save()
+    return p:execute(nil, true) == nil
+  end,
+  intree = function(node)
+    local p = server.prepare("select node from (select id as node from tree "
+      .. "union select lchild from tree union select rchild from tree) as q "
+      .. "where node=$1", {"int4"}):save()
+    return p:execute({node}, true) ~= nil
+  end,
+  isleaf = function(node)
+    local p = server.prepare("select leaf from (select lchild as leaf from tree "
+      .. "union select rchild from tree except select id from tree) as q "
+      .. "where leaf=$1", {"int4"}):save()
+    return p:execute({node}, true) ~= nil
+  end,
+  isleafparent = function(node)
+    local p = server.prepare("select lp from (select id as lp from tree "
+      .. "except select ti.id from tree ti join tree tl on ti.lchild=tl.id "
+      .. "join tree tr on ti.rchild=tr.id) as q where lp=$1", {"int4"}):save()
+    return p:execute({node}, true) ~= nil
+  end
+}
 $$ language pllua;
 
-create function postorder (t text, s int) returns setof int as $$
-  coroutine.yield(s)
-  local q = server.execute("select * from "..t.." where id="..s, true, 1)
-  if q ~= nil then
-    local l, r = q[1].l, q[1].r
-    if l ~= nil then postorder(t, l) end
-    if r ~= nil then postorder(t, r) end
+create trigger tree_trigger before insert or update or delete on tree
+  for each row execute procedure treetrigger();
+
+create function filltree (t text, n int) returns void as $$
+  local p = server.prepare("insert into " .. t .. " values($1, $2, $3)",
+    {"int4", "int4", "int4"})
+  for i = 1, n do
+    local lchild, rchild = 2 * i, 2 * i + 1 -- siblings
+    p:execute{i, lchild, rchild}
   end
+$$ language pllua;
+
+
+-- preorder without plan caching
+create function preorder (t text, s int) returns setof int as $$
+  coroutine.yield(s)
+  local q = server.execute("select * from " .. t .. " where id=" .. s,
+      true, 1)
+  if q ~= nil then
+    local lchild, rchild = q[1].lchild, q[1].rchild -- store before next query
+    if lchild ~= nil then preorder(t, lchild) end
+    if rchild ~= nil then preorder(t, rchild) end
+  end
+$$ language pllua;
+
+-- postorder with plan caching
+create function postorder (t text, s int) returns setof int as $$
+  local p = upvalue[t]
+  if p == nil then -- not saved?
+    p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
+    upvalue[t] = p:save()
+  end
+  local q = p:execute({s}, true, 1) -- read-only, one row
+  if q ~= nil then
+    local lchild, rchild = q[1].lchild, q[1].rchild -- store before next query
+    if lchild ~= nil then postorder(t, lchild) end
+    if rchild ~= nil then postorder(t, rchild) end
+  end
+  coroutine.yield(s)
+end
+do upvalue = {}
 $$ language pllua;
 
 
@@ -309,3 +377,18 @@ $$ language pllua;
 create function nested3 (a text) returns text as $$
   return a
 $$ language pllua;
+
+
+-- int_interval
+
+create table features (feat int_interval);
+
+create function insert_ii(m int, n int) returns void as $$
+  for i=1,n do 
+    local x,y = math.random(1, m), math.random(1, m)
+    if x>y then x,y = y,x end
+    server.execute(string.format("insert into features values('(%d, %d)')",
+        x, y))
+  end
+$$ language pllua;
+
