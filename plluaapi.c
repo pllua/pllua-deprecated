@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.7 2007/12/18 03:34:40 carvalho Exp $
+ * $Id: plluaapi.c,v 1.8 2007/12/31 17:01:46 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -11,10 +11,10 @@
 typedef struct luaP_Info {
   int oid;
   int nargs;
-  Oid *arg;
   Oid result;
   bool result_isset;
   lua_State *L; /* thread for SETOF iterator */
+  Oid arg[1];
 } luaP_Info;
 
 #define PLLUA_LOCALVAR "upvalue"
@@ -366,7 +366,6 @@ static luaP_Info *luaP_newinfo (lua_State *L, FunctionCallInfo fcinfo,
   fi = lua_newuserdata(L, sizeof(luaP_Info) + fcinfo->nargs * sizeof(Oid));
   fi->oid = (int) fcinfo->flinfo->fn_oid;
   fi->nargs = (istrigger) ? PLLUA_VARARG : fcinfo->nargs;
-  fi->arg = (fcinfo->nargs > 0) ? ((Oid *) (fi + 1)) : NULL;
   /* read arg types */
   for (i = 0; i < fcinfo->nargs; i++) {
     type = luaP_gettypechar(argtype[i]);
@@ -852,8 +851,8 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
           dat = HeapTupleGetDatum(heap_form_tuple(BlessTupleDesc(typedesc),
                 values, nulls));
           ReleaseTupleDesc(typedesc);
-          pfree(values);
           pfree(nulls);
+          pfree(values);
         }
         break;
       }
@@ -864,9 +863,10 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
 
 static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
     Oid type) {
-  bool isnull;
-  Datum dat = luaP_todatum(L, type, 0, &isnull);
-  fcinfo->isnull = isnull;
+  Datum dat = luaP_todatum(L, type, 0, &fcinfo->isnull);
+  /*MemoryContext currcxt = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
+  dat = PointerGetDatum(PG_DETOAST_DATUM_COPY(dat));
+  MemoryContextSwitchTo(currcxt);*/
   lua_pop(L, 1);
   return dat;
 }
@@ -878,8 +878,10 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
   Datum retval = 0;
   luaP_Info *fi = NULL;
   bool istrigger;
+  MemoryContext mcxt, currmcxt = CurrentMemoryContext;
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
+  mcxt = MemoryContextSwitchTo(currmcxt); /* switch back from SPI */
   PG_TRY();
   {
     istrigger = CALLED_AS_TRIGGER(fcinfo);
@@ -894,8 +896,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
       if (lua_pcall(L, nargs, 0, 0))
         luaP_error(L, "runtime");
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
-          && !TRIGGER_FIRED_BY_DELETE(trigdata->tg_event)
-          && TRIGGER_FIRED_BEFORE(trigdata->tg_event))
+          && TRIGGER_FIRED_BEFORE(trigdata->tg_event)) /* return? */
         retval = luaP_gettriggerresult(L);
       luaP_cleantrigger(L);
     }
@@ -921,11 +922,11 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         luaP_pushargs(fi->L, fcinfo, fi);
         status = lua_resume(fi->L, fi->nargs);
         if (status == LUA_YIELD && !lua_isnil(fi->L, -1)) {
-          rsi->isDone = ExprMultipleResult;
+          rsi->isDone = ExprMultipleResult; /* SRF: next */
           retval = luaP_getresult(fi->L, fcinfo, fi->result);
         }
         else if (status == 0 || lua_isnil(fi->L, -1)) { /* last call? */
-          rsi->isDone = ExprEndResult;
+          rsi->isDone = ExprEndResult; /* SRF: done */
           lua_pushlightuserdata(L, (void *) fi->L);
           lua_pushnil(L);
           lua_rawset(L, LUA_REGISTRYINDEX);
@@ -959,6 +960,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     PG_RE_THROW();
   }
   PG_END_TRY();
+  MemoryContextSwitchTo(mcxt); /* switch to SPI mem context */
   if (SPI_finish() != SPI_OK_FINISH)
     elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   return retval;

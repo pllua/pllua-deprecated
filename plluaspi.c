@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.9 2007/12/18 03:34:40 carvalho Exp $
+ * $Id: plluaspi.c,v 1.10 2007/12/31 17:01:46 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -45,7 +45,7 @@ typedef struct luaP_Plan {
   int nargs;
   int issaved;
   SPI_plan *plan;
-  Oid *type;
+  Oid type[1];
 } luaP_Plan;
 
 
@@ -356,7 +356,7 @@ static int luaP_executeplan (lua_State *L) {
     luaP_Buffer *b;
     if (lua_type(L, 2) != LUA_TTABLE) luaL_typerror(L, 2, "table");
     b = luaP_getbuffer(L, p->nargs);
-    luaP_fillbuffer(L, 2, p->type, b);
+    luaP_fillbuffer(L, 2, p->type, b); /* TODO: check it better */
     result = SPI_execute_plan(p->plan, b->value, b->null, ro, c); 
   }
   else
@@ -372,7 +372,7 @@ static int luaP_executeplan (lua_State *L) {
 
 static int luaP_saveplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
-  SPI_saveplan(p->plan);
+  p->plan = SPI_saveplan(p->plan);
   switch (SPI_result) {
     case SPI_ERROR_ARGUMENT:
       return luaL_error(L, "null plan to be saved");
@@ -437,7 +437,6 @@ static int luaP_prepare (lua_State *L) {
       sizeof(luaP_Plan) + nargs * sizeof(Oid));
   p->issaved = 0;
   p->nargs = nargs;
-  p->type = (Oid *) (p + 1);
   if (nargs > 0) { /* read types? */
     lua_pushnil(L);
     while (lua_next(L, 2)) {

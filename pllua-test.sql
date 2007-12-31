@@ -108,45 +108,40 @@ create function treetrigger() returns trigger as $$
   local row, operation = trigger.row, trigger.operation
   if operation == "update" then
     trigger.row = nil -- updates not allowed
-  else
+  elseif operation == "insert" then
     local id, lchild, rchild = row.id, row.lchild, row.rchild
-    -- check input consistency
     if lchild == rchild or id == lchild or id == rchild -- avoid loops
         or (lchild ~= nil and upvalue.intree(lchild)) -- avoid cycles
         or (rchild ~= nil and upvalue.intree(rchild))
-        -- operate on leaves only:
-        or (operation == "insert" and not upvalue.emptytree()
-          and not upvalue.isleaf(id)) -- not leaf?
-        or (operation == "delete"
-          and not upvalue.isleafparent(id)) then -- not both leaf parent?
+        or (upvalue.nonemptytree() and not upvalue.isleaf(id)) -- not leaf?
+        then
+      trigger.row = nil
+    end
+  else -- operation == "delete"
+    if not upvalue.isleafparent(row.id) then -- not both leaf parent?
       trigger.row = nil
     end
   end
 end
-do upvalue = { -- cache plans
-  emptytree = function()
-    local p = server.prepare("select * from tree"):save()
-    return p:execute(nil, true) == nil
-  end,
-  intree = function(node)
-    local p = server.prepare("select node from (select id as node from tree "
-      .. "union select lchild from tree union select rchild from tree) as q "
-      .. "where node=$1", {"int4"}):save()
-    return p:execute({node}, true) ~= nil
-  end,
-  isleaf = function(node)
-    local p = server.prepare("select leaf from (select lchild as leaf from tree "
-      .. "union select rchild from tree except select id from tree) as q "
-      .. "where leaf=$1", {"int4"}):save()
-    return p:execute({node}, true) ~= nil
-  end,
-  isleafparent = function(node)
-    local p = server.prepare("select lp from (select id as lp from tree "
-      .. "except select ti.id from tree ti join tree tl on ti.lchild=tl.id "
-      .. "join tree tr on ti.rchild=tr.id) as q where lp=$1", {"int4"}):save()
-    return p:execute({node}, true) ~= nil
+do
+  local getter = function(cmd, ...)
+    local plan = server.prepare(cmd, {...}):save()
+    return function(...)
+      return plan:execute({...}, true) ~= nil
+    end
   end
-}
+  upvalue = { -- plan closures
+    nonemptytree = getter("select * from tree"),
+    intree = getter("select node from (select id as node from tree "
+      .. "union select lchild from tree union select rchild from tree) as q "
+      .. "where node=$1", "int4"),
+    isleaf = getter("select leaf from (select lchild as leaf from tree "
+      .. "union select rchild from tree except select id from tree) as q "
+      .. "where leaf=$1", "int4"),
+    isleafparent = getter("select lp from (select id as lp from tree "
+      .. "except select ti.id from tree ti join tree tl on ti.lchild=tl.id "
+      .. "join tree tr on ti.rchild=tr.id) as q where lp=$1", "int4")
+  }
 $$ language pllua;
 
 create trigger tree_trigger before insert or update or delete on tree
@@ -391,4 +386,25 @@ create function insert_ii(m int, n int) returns void as $$
         x, y))
   end
 $$ language pllua;
+
+-- Fasta input
+
+create function fasta (fname text) returns text as $$
+  local file = assert(io.open(fname), "cannot open file")
+  local t = {} -- string buffer
+  for line in file:lines() do
+    if line:sub(1, 1) ~= ">" then -- not description?
+      t[#t + 1] = line:gsub(".", upvalue)
+    end
+  end
+  return table.concat(t)
+end
+do upvalue = function(c) -- repl for gsub
+  local l = c:lower()
+  if l ~= "a" and l ~= "c" and l ~= "g" and l ~= "t" then
+    l = "n"
+  end
+  return l
+end
+$$ language plluau;
 
