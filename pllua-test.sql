@@ -190,6 +190,12 @@ $$ language pllua;
 
 -- tests
 
+create function max (a integer, b integer) returns integer as $$
+  if a == nil then return b end
+  if b == nil then return a end
+  return a > b and a or b
+$$ language pllua;
+
 create type greeting as (how text, who text);
 
 create function greetingset (how text, who text[])
@@ -225,6 +231,8 @@ do
   end
   --perm = coroutine.wrap(perm)
 $$ language pllua;
+
+select perm(ARRAY['a', 'b', 'c']);
 
 -- simple counter
 create function counter() returns int as $$
@@ -303,11 +311,19 @@ create function hello () returns text as $$
   return "Hello!"
 $$ language pllua;
 
-create function counter () returns int as $$
-  upvalue = upvalue + 1
-  return upvalue
-end
-do upvalue = 0
+create function getcounter() returns int as $$
+  if shared.counter == nil then -- not cached?
+    setshared("counter", 0)
+  end
+  return counter -- _G.counter == shared.counter
+$$ language pllua;
+
+create function setcounter(c integer) returns void as $$
+  if shared.counter == nil then -- not cached?
+    setshared("counter", c)
+  else
+    counter = c
+  end
 $$ language pllua;
 
 create function global1 () returns text as $$

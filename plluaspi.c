@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.10 2007/12/31 17:01:46 carvalho Exp $
+ * $Id: plluaspi.c,v 1.11 2008/01/04 15:42:21 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -153,7 +153,7 @@ static int luaP_tuplenewindex (lua_State *L) {
 
 static int luaP_tuplegc (lua_State *L) {
   luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
-  if (t->newtuple) /* allocated in top context? */
+  if (t->newtuple) /* allocated in upper context? */
     heap_freetuple(t->newtuple);
   return 0;
 }
@@ -194,8 +194,8 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
   lua_setmetatable(L, -2);
 }
 
+/* adapted from SPI_modifytuple */
 static HeapTuple luaP_copytuple (luaP_Tuple *t) {
-  MemoryContext currcxt = MemoryContextSwitchTo(TopTransactionContext);
   HeapTuple tuple = heap_form_tuple(t->desc, t->value, t->null);
   /* copy identification info */
   tuple->t_data->t_ctid = t->tuple->t_data->t_ctid;
@@ -203,8 +203,7 @@ static HeapTuple luaP_copytuple (luaP_Tuple *t) {
   tuple->t_tableOid = t->tuple->t_tableOid;
   if (t->desc->tdhasoid)
     HeapTupleSetOid(tuple, HeapTupleGetOid(t->tuple));
-  t->newtuple = tuple;
-  MemoryContextSwitchTo(currcxt);
+  t->newtuple = SPI_copytuple(tuple); /* in upper mem context */
   return tuple;
 }
 
@@ -292,22 +291,21 @@ static int luaP_tuptabletostring (lua_State *L) {
 
 /* ======= Cursor ======= */
 
-static int luaP_newcursor (lua_State *L, Portal cursor) {
+void luaP_pushcursor (lua_State *L, Portal cursor) {
   luaP_Cursor *c = (luaP_Cursor *) lua_newuserdata(L, sizeof(luaP_Cursor));
   c->cursor = cursor;
   luaL_getmetatable(L, PLLUA_CURSORMT);
   lua_setmetatable(L, -2);
-  return 1;
 }
 
-static int luaP_cursorgc (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, 1);
-  SPI_cursor_close(c->cursor);
-  return 0;
+Portal luaP_tocursor (lua_State *L, int pos) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, pos, PLLUA_CURSORMT);
+  return c->cursor;
 }
 
 static int luaP_cursortostring (lua_State *L) {
-  lua_pushfstring(L, "cursor: %p", lua_touserdata(L, 1));
+  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, 1);
+  lua_pushfstring(L, "cursor: %p [%s]", c, c->cursor->name);
   return 1;
 }
 
@@ -356,7 +354,7 @@ static int luaP_executeplan (lua_State *L) {
     luaP_Buffer *b;
     if (lua_type(L, 2) != LUA_TTABLE) luaL_typerror(L, 2, "table");
     b = luaP_getbuffer(L, p->nargs);
-    luaP_fillbuffer(L, 2, p->type, b); /* TODO: check it better */
+    luaP_fillbuffer(L, 2, p->type, b);
     result = SPI_execute_plan(p->plan, b->value, b->null, ro, c); 
   }
   else
@@ -406,7 +404,7 @@ static int luaP_getcursorplan (lua_State *L) {
       cursor = SPI_cursor_open(name, p->plan, NULL, NULL, ro);
     if (cursor == NULL)
       return luaL_error(L, "error opening cursor");
-    luaP_newcursor(L, cursor);
+    luaP_pushcursor(L, cursor);
   }
   else lua_pushnil(L);
   return 1;
@@ -474,7 +472,8 @@ static int luaP_execute (lua_State *L) {
 /* returns cursor */
 static int luaP_find (lua_State *L) {
   Portal cursor = SPI_cursor_find(luaL_checkstring(L, 1));
-  if (cursor != NULL) luaP_newcursor(L, cursor);
+  if (cursor != NULL) luaP_pushcursor(L, cursor);
+  else lua_pushnil(L);
   return 1;
 }
 
@@ -520,7 +519,6 @@ static const luaL_reg luaP_Tuptable_mt[] = {
 };
 
 static const luaL_reg luaP_Cursor_mt[] = {
-  {"__gc", luaP_cursorgc},
   {"__tostring", luaP_cursortostring},
   {NULL, NULL}
 };

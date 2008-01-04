@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.1
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.7 2007/11/08 14:56:29 carvalho Exp $
+ * $Id: pllua.h,v 1.8 2008/01/04 15:42:21 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -38,6 +38,8 @@ HeapTuple luaP_totuple (lua_State *L);
 /* SPI */
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
+void luaP_pushcursor (lua_State *L, Portal cursor);
+Portal luaP_tocursor (lua_State *L, int pos);
 
 /* =========================================================================
 
