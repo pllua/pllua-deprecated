@@ -1,5 +1,5 @@
 /* Basic style */
-/* $Id: style.css,v 1.1 2008/01/04 15:44:04 carvalho Exp $ */
+/* $Id: style.css,v 1.2 2008/01/06 03:47:09 carvalho Exp $ */
 
 /* =====  Typography and colors  ===== */
 
@@ -145,7 +145,7 @@ body {
 #page {
   margin: 0px auto;
   padding: 0;
-  width: 800px;
+  width: 85%;
 }
   
 #header {
@@ -163,14 +163,13 @@ body {
 
 #title {
   height: 200px;
-  width: 800px;
-  padding-left: 10px;
+  width: 100%;
 }
 
 .content {
   padding: 0 0 20px 0;
   margin: 5px 50px 30px 50px;
-  width: 700px;
+  width: 90%;
 }
 
 .content .comment {
@@ -180,7 +179,7 @@ body {
 #footer {
   padding: 0;
   margin: 0 auto;
-  width: 800px;
+  width: 100%;
   clear: both;
 }
 

@@ -4,7 +4,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 
 <!-- PL/Lua home -->
-<!-- $Id: manual.html,v 1.1 2008/01/04 15:44:04 carvalho Exp $ -->
+<!-- $Id: manual.html,v 1.2 2008/01/06 03:47:09 carvalho Exp $ -->
 
 <head>
 	<title>PL/Lua documentation</title>
@@ -140,10 +140,15 @@ global variables should then be created with
 
 <p>Finally, errors in PL/Lua are propagated to the calling query and the
 transaction is aborted if the error is not caught. Messages can be emitted by
-<code>log</code>, <code>info</code>, <code>notice</code>, and
-<code>warning</code> at log levels LOG, INFO, NOTICE, and WARNING
-respectively. In particular, <code>print</code> emits a log message of level
-INFO and is equivalent to <code>info</code>.</p>
+<a href="#log"><code>log</code></a>, <code>info</code>, <code>notice</code>,
+and <code>warning</code> at log levels LOG, INFO, NOTICE, and WARNING
+respectively. In particular, <code>print</code> emits log messages of level
+INFO.</p>
+
+<h4 id="log"><code>log(msg)</code></h4>
+<p>Emits message <code>msg</code> at log level LOG. Similar functions
+<code>info</code>, <code>notice</code>, and <code>warning</code> have the same
+signature but emit <code>msg</code> at their respective log levels.</p>
 
 <h4 id="setshared"><code>setshared(varname [, value])</code></h4>
 <p>Sets global <code>varname</code> to <code>value</code>, which defaults to
@@ -327,11 +332,19 @@ $$ LANGUAGE pllua;
 
 <p>The server interface in PL/Lua comprises the methods in table
 <code>server</code> and userdata <code>plan</code>, <code>cursor</code>,
-<code>tuple</code>, and <code>tuptable</code>.</p>
+<code>tuple</code>, and <code>tupletable</code>. The entry point to the
+<acronym title="Server Programming Interface">SPI</acronym> is the table
+<code>server</code>: <code>server.execute</code> executes a SQL command,
+<code>server.find</code> retrieves a <a href="#cursors">cursor</a>, and
+<code>server.prepare</code> prepares, but does not execute, a SQL command into
+a <a href="#plans">plan</a>.</p>
 
-<h3><code>server</code></h3>
-<p>The <code>server</code> table contains methods to prepare plans, execute
-SQL commands, and find cursors. It is SPI's entry point in PL/Lua.</p>
+<p>A <em>tuple</em> represents a composite type, record, or row. It can be
+accessed similarly to a Lua table, by simply indexing fields in the composite
+type as keys. Tuple sets, like the ones returned by
+<code>server.execute</code>, <code>plan:execute</code>, and
+<code>cursor:fetch</code>, are stored in a <em>tupletable</em>. A tupletable
+is similar to an integer-keyed Lua table.</p>
 
 <h4 id="server_execute">
   <code>server.execute(cmd, readonly [, count])</code>
@@ -341,7 +354,7 @@ SQL commands, and find cursors. It is SPI's entry point in PL/Lua.</p>
 read-only and execution overhead is reduced. If <code>count</code> is zero
 then the command is executed for all rows that it applies to; otherwise at
 most <code>count</code> rows are returned. <code>count</code> defaults to
-zero. <code>server.execute</code> returns a <em>tuptable</em>.</p>
+zero. <code>server.execute</code> returns a <em>tupletable</em>.</p>
 
 <h4 id="server_find"><code>server.find(name)</code></h4>
 <p>Finds an existing cursor with name <code>name</code> and returns a cursor
@@ -350,13 +363,20 @@ userdatum or <code>nil</code> if the cursor cannot be found.</p>
 <h4 id="server_prepare"><code>server.prepare(cmd, argtypes)</code></h4>
 <p>Prepares and returns a plan from SQL statement <code>cmd</code>. If
 <code>cmd</code> specifies input parameters, their types should be specified
-in table <code>argtypes</code>. The returned plan should not be used outside
-the current invocation of <code>server.prepare</code> since it is freed by
-<code>SPI_finish</code>. Use <a href="#plan_save">plan:save</a> if you wish to
-store the plan for latter application.</p>
+in table <code>argtypes</code>. The plan can be executed with
+<a href="#plan_execute"><code>plan:execute</code></a>. The returned plan
+should not be used outside the current invocation of
+<code>server.prepare</code> since it is freed by <code>SPI_finish</code>. Use
+<a href="#plan_save"><code>plan:save</code></a> if you wish to store the plan
+for latter application.</p>
 
 <h3 id="plans">Plans</h3>
-<p>TODO: intro to plans.</p>
+<p><em>Plans</em> are used when a command is to be executed repeatedly,
+possibly with different arguments. In this case, we can prepare a plan with
+<code>server.prepare</code> and execute it later with
+<code>plan:execute</code> (or using a cursor). It is also possible to save a
+plan with <code>plan:save</code> if we want to keep the plan for longer than
+the current transaction.</p>
 
 <h4 id="plan_execute">
   <code>plan:execute(cmd, args, readonly [, count])</code>
@@ -365,8 +385,11 @@ store the plan for latter application.</p>
 <code>args</code>. <code>readonly</code> and <code>count</code> have the same
 meaning as in <a href="#server_execute">server.execute</a>.</p>
 
-<h4 id="plan_getcursor"><code>plan:getcursor(args, readonly, name)</code></h4>
-<p>Sets up a cursor with name <code>name</code> from a prepared plan.
+<h4 id="plan_getcursor">
+  <code>plan:getcursor(args, readonly [, name])</code>
+</h4>
+<p>Sets up a cursor with name <code>name</code> from a prepared plan. If
+<code>name</code> is not a string a random name is selected by the system.
 <code>readonly</code> has the same meaning as in
 <a href="#server_execute">server.execute</a>.</p>
 
@@ -379,10 +402,13 @@ otherwise.</p>
 session.</p>
 
 <h3 id="cursors">Cursors</h3>
-<p>Using a cursor instead of executing the plan directly has two benefits. First,
-the result rows can be retrieved a few at a time, avoiding memory overrun for
-queries that return many rows. Second, a portal can outlive the current
-procedure (it can, in fact, live to the end of the current transaction).</p>
+<p><em>Cursors</em> execute previously prepared plans. Cursors provide a more
+powerful abstraction than simply executing a plan, since we can fetch results
+and move in a query both forward and backward. Moreover, we can limit the
+number of rows to be retrieved, and so avoid memory overruns for large queries
+in contrast to direct plan execution. Another advantage is that cursors can
+outlive the current procedure, living to the end of the current
+transaction.</p>
 
 <h4 id="cursor_fetch"><code>cursor:fetch([count])</code></h4>
 <p>Fetches at most <code>count</code> rows from a cursor. If
@@ -398,11 +424,14 @@ backward.</p>
 <p>Closes a cursor.</p>
 
 
-<h3>Examples</h3>
+<h3>Example</h3>
+<p>To illustrate the SPI in PL/Lua, let's store a binary tree:
 
 <pre>
 CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
 </pre>
+
+which we can fill using:</p>
 
 <pre>
 CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
@@ -410,16 +439,22 @@ CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
     {"int4", "int4", "int4"})
   for i = 1, n do
     local lchild, rchild = 2 * i, 2 * i + 1 <em>-- siblings</em>
-    p:execute{i, lchild, rchild}
+    p:execute{i, lchild, rchild} <em>-- insert values</em>
   end
 $$ LANGUAGE pllua;
 </pre>
+
+<p>Local variable <code>p</code> stores a prepared plan for insertion with
+three parameters as values, while the actual insertion is executed in the
+loop.</p>
+
+<p>We can perform a preorder traversal of the tree with:</p>
 
 <pre>
 CREATE FUNCTION preorder (t text, s int) RETURNS SETOF int AS $$
   coroutine.yield(s)
   local q = server.execute("select * from " .. t .. " where id=" .. s,
-      true, 1)
+      true, 1) <em>-- read-only, only 1 result</em>
   if q ~= nil then
     local lchild, rchild = q[1].lchild, q[1].rchild <em>-- store before next query</em>
     if lchild ~= nil then preorder(t, lchild) end
@@ -428,30 +463,107 @@ CREATE FUNCTION preorder (t text, s int) RETURNS SETOF int AS $$
 $$ LANGUAGE pllua;
 </pre>
 
+<p>The traversal is recursive and we simply execute a query in every call and
+store its result in tupletable <code>q</code>. It is important to store the
+fields in <code>q[1]</code> in locals before next query, since <code>q</code>
+gets updated in the next query.</p>
+
+<p>In <code>preorder</code> we executed a query many times. For our postorder
+traversal below we prepare a plan, save it, and cache in a
+<code>upvalue</code> table. Instead of executing the plan, we get a cursor
+from it and fetch only one row, as before.</p>
+
 <pre>
 CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
   local p = upvalue[t]
-  if p == nil then <em>-- not cached?</em>
+  if p == nil then <em>-- plan not cached?</em>
     p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
     upvalue[t] = p:save()
   end
-  local q = p:execute({s}, true, 1) <em>-- read-only, one row</em>
+  local c = p:getcursor({s}, true) <em>-- read-only</em>
+  local q = c:fetch(1) <em>-- one row</em>
   if q ~= nil then
     local lchild, rchild = q[1].lchild, q[1].rchild <em>-- store before next query</em>
+    c:close()
     if lchild ~= nil then postorder(t, lchild) end
     if rchild ~= nil then postorder(t, rchild) end
   end
   coroutine.yield(s)
 end
-do upvalue = {}
+do upvalue = {} <em>-- plan cache</em>
 $$ LANGUAGE pllua;
 </pre>
 
 
 <h2 id="triggers">Triggers</h2>
 <small>Triggers in PL/Lua</small>
+<p>Triggers can be defined in PL/Lua as usual by just creating a function
+returning <code>trigger</code>. When a function returns a trigger, PL/Lua
+creates a (global) table <em><code>trigger</code></em> containing all
+necessary information. The <code>trigger</code> table is described below.</p>
+
+<table><tbody>
+    <tr>
+      <td><strong>Key</strong></td>
+      <td><strong>Value</strong></td>
+    </tr>
+    <tr>
+      <td><code>name</code></td>
+      <td>trigger name</td>
+    </tr>
+    <tr>
+      <td><code>when</code></td>
+      <td>
+        <code>"before"</code> if trigger fired before or
+        <code>"after"</code> if trigger fired after
+      </td>
+    </tr>
+    <tr>
+      <td><code>level</code></td>
+      <td>
+        <code>"row"</code> if row-level trigger or
+        <code>"statement"</code> if statement-level trigger
+      </td>
+    </tr>
+    <tr>
+      <td><code>operation</code></td>
+      <td>
+        <code>"insert"</code>, <code>"update"</code>, or
+        <code>"delete"</code> depending on trigger operation
+      </td>
+    </tr>
+    <tr>
+      <td><code>relation</code></td>
+      <td>
+        Lua table describing the relation with keys: <code>name</code> is
+        relation name (string)<br /> and <code>attributes</code> is a table with
+        relation attributes as string keys
+      </td>
+    </tr>
+    <tr>
+      <td><code>row</code></td>
+      <td>
+        Tuple representing the row-level trigger's target: in update
+        operations<br /> holds the <em>new</em> row, otherwise holds the
+        <em>old</em> row. <code>row</code> is <code>nil</code> in<br />
+        statement-level triggers.
+      </td>
+    </tr>
+</tbody></table>
+
+<p>Trigger functions in PL/Lua don't return; instead, only for
+row-level-before operations, the tuple in <code>trigger.row</code> is read for
+the actual returned value. The returned tuple has then the same effect for
+general triggers: if <code>nil</code> the operation for the current row is
+skipped, a modified tuple will be inserted or updated for insert and update
+operations, and <code>trigger.row</code> should not be modified if none of the
+two previous outcomes is expected.</p>
 
 <h3>Example</h3>
+<p>Let's restrict row operations in our previous binary tree example: updates
+are not allowed, deletions are only possible on leaf parents, and insertions
+should not introduce cycles and occur only at leaves. We store closures in
+<code>upvalue</code> that have prepared plans as upvalues.</p>
 
 <pre>
 create function treetrigger() returns trigger as $$
@@ -465,7 +577,7 @@ create function treetrigger() returns trigger as $$
         or (rchild ~= nil and upvalue.intree(rchild))
         or (upvalue.nonemptytree() and not upvalue.isleaf(id)) <em>-- not leaf?</em>
         then
-      trigger.row = nil
+      trigger.row = nil <em>-- skip operation</em>
     end
   else <em>-- operation == "delete"</em>
     if not upvalue.isleafparent(row.id) then <em>-- not both leaf parent?</em>
@@ -495,6 +607,8 @@ do
 $$ language pllua;
 </pre>
 
+<p>Finally, we set the trigger on table <code>tree</code>:</p>
+
 <pre>
 create trigger tree_trigger before insert or update or delete on tree
   for each row execute procedure treetrigger();
@@ -504,15 +618,41 @@ create trigger tree_trigger before insert or update or delete on tree
 <h2 id="installation">Installation</h2>
 <small>How to obtain and install PL/Lua</small>
 <p>PL/Lua is distributed as a source package or in binary format, and can be
-installed as a regular PostgreSQL module:</p>
+obtained at <a href="http://pgfoundry.org/projects/pllua">PgFoundry</a>.
+Assuming Lua 5.1 is installed in your system, the source package is installed
+like any regular PostgreSQL module, that is, after downloading and unpacking,
+just run:</p>
 
 <pre>
+$ make &amp;&amp; sudo make install
 $ psql -f pllua.sql <em>&lt;database&gt;</em>
 </pre>
 
 <p>The SQL script <code>pllua.sql</code> installs both trusted and untrusted
 flavors of PL/Lua and creates the module table <code>pllua.init</code>.</p>
 
+<h3>License</h3>
+<p>Copyright (c) 2008 Luis Carvalho</p>
+
+<p>Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the
+Software, and to permit persons to whom the Software is furnished
+to do so, subject to the following conditions:</p>
+
+<p>The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.</p>
+
+<p>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</p>
 
 </div><!-- end content -->
 
@@ -522,7 +662,7 @@ flavors of PL/Lua and creates the module table <code>pllua.init</code>.</p>
 &nbsp; :: &nbsp;
 <a href="http://jigsaw.w3.org/css-validator/check/referer">Valid CSS</a>
 <br />
-Last modified: $Date: 2008/01/04 15:44:04 $, $Author: carvalho $.
+Last modified: $Date: 2008/01/06 03:47:09 $, $Author: carvalho $.
 </p>
 </div>
 
