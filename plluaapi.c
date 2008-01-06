@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.9 2008/01/04 15:42:21 carvalho Exp $
+ * $Id: plluaapi.c,v 1.10 2008/01/06 03:46:52 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -129,9 +129,11 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   }
   lua_setfield(L, -2, "relation");
   /* row */
-  luaP_pushtuple(L, tdata->tg_relation->rd_att,
-      (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) ? tdata->tg_newtuple
-      : tdata->tg_trigtuple, tdata->tg_relation->rd_id, 0);
+  if (TRIGGER_FIRED_FOR_ROW(tdata->tg_event))
+    luaP_pushtuple(L, tdata->tg_relation->rd_att,
+        (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) ? tdata->tg_newtuple
+        : tdata->tg_trigtuple, tdata->tg_relation->rd_id, 0);
+  else lua_pushnil(L);
   lua_setfield(L, -2, "row");
   /* trigger name */
   lua_pushstring(L, tdata->tg_trigger->tgname);

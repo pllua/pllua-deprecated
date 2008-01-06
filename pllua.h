@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.1
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.8 2008/01/04 15:42:21 carvalho Exp $
+ * $Id: pllua.h,v 1.9 2008/01/06 03:46:52 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -43,7 +43,7 @@ Portal luaP_tocursor (lua_State *L, int pos);
 
 /* =========================================================================
 
-Copyright (c) 2007 Luis Carvalho
+Copyright (c) 2008 Luis Carvalho
 
 Permission is hereby granted, free of charge, to any person
 obtaining a copy of this software and associated documentation files

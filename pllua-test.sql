@@ -169,8 +169,28 @@ create function preorder (t text, s int) returns setof int as $$
   end
 $$ language pllua;
 
--- postorder with plan caching
+-- postorder with plan caching and cursors
 create function postorder (t text, s int) returns setof int as $$
+  local p = upvalue[t]
+  if p == nil then -- not saved?
+    p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
+    upvalue[t] = p:save()
+  end
+  local c = p:getcursor({s}, true) -- read-only
+  local q = c:fetch(1) -- one row
+  if q ~= nil then
+    local lchild, rchild = q[1].lchild, q[1].rchild -- store before next query
+    c:close()
+    if lchild ~= nil then postorder(t, lchild) end
+    if rchild ~= nil then postorder(t, rchild) end
+  end
+  coroutine.yield(s)
+end
+do upvalue = {}
+$$ language pllua;
+
+-- postorder with plan caching
+create function postorder0 (t text, s int) returns setof int as $$
   local p = upvalue[t]
   if p == nil then -- not saved?
     p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
