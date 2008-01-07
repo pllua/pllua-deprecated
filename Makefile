@@ -1,9 +1,10 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.4 2007/09/21 03:20:52 carvalho Exp $
+# $Id: Makefile,v 1.5 2008/01/07 23:41:37 carvalho Exp $
 
 MODULES = pllua plluau
 DATA_built = pllua.sql
 PG_CPPFLAGS = -I/usr/include/lua5.1
+EXTRA_CLEAN = plluaapi.o plluaspi.o
 
 PGXS := $(shell pg_config --pgxs)
 include $(PGXS)
