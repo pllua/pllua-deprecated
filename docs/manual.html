@@ -4,7 +4,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 
 <!-- PL/Lua home -->
-<!-- $Id: manual.html,v 1.2 2008/01/06 03:47:09 carvalho Exp $ -->
+<!-- $Id: manual.html,v 1.3 2008/01/07 23:41:50 carvalho Exp $ -->
 
 <head>
 	<title>PL/Lua documentation</title>
@@ -94,7 +94,7 @@ create functions using this untrusted version of PL/Lua.</p>
 <p>Unprivileged users can only create functions using the trusted version of
 PL/Lua, <code>pllua</code>. The environment in <code>pllua</code> is more
 restricted: only <code>table</code>, <code>string</code>, and
-<code>math</code> libraries are fully loaded, the </code>os</code> library is
+<code>math</code> libraries are fully loaded, the <code>os</code> library is
 restricted, the <code>package</code> library is not available, that is, there
 is no module system (including <code>require</code>), and the global table is
 restricted for writing. The following table summarizes the differences:</p>
@@ -158,7 +158,7 @@ signature but emit <code>msg</code> at their respective log levels.</p>
 
 <h2 id="functions">Functions</h2>
 <small>Functions and data values in PL/Lua</small>
-<p>PL/Lua functions are created according to the following prototype:
+<p>PL/Lua functions are created according to the following prototype:</p>
 
 <pre>
 CREATE FUNCTION <strong>func</strong>(<em>args</em>) RETURNS <em>rettype</em> AS $$
@@ -166,7 +166,7 @@ CREATE FUNCTION <strong>func</strong>(<em>args</em>) RETURNS <em>rettype</em> AS
 $$ LANGUAGE [pllua | plluau];
 </pre>
 
-where <code>args</code> should be <em>named</em> arguments.
+<p>where <code>args</code> should be <em>named</em> arguments.
 There is no conversion of arguments to string/text form between Lua and
 PostgreSQL. Basic data types -- like integer, double, text -- and their arrays
 are supported. The value returned by <code>func</code> is converted to a datum
@@ -254,7 +254,7 @@ When a SRF <code>func</code> is first called a new Lua thread is created
 and <code>func</code> is pushed along with its arguments onto the new thread's
 stack. A new result is then returned whenever <code>func</code> yields and
 <code>func</code> is done when the coroutine suspends or finishes. Using our
-composite type from above, we can define
+composite type from above, we can define</p>
 
 <pre>
 CREATE FUNCTION greetingset (how text, who text[])
@@ -265,7 +265,7 @@ CREATE FUNCTION greetingset (how text, who text[])
 $$ LANGUAGE pllua;
 </pre>
 
-with this usage example:
+<p>with this usage example:</p>
 
 <pre>
 # SELECT makegreeting(greetingset, '%s, %s!') FROM
@@ -425,13 +425,13 @@ backward.</p>
 
 
 <h3>Example</h3>
-<p>To illustrate the SPI in PL/Lua, let's store a binary tree:
+<p>To illustrate the SPI in PL/Lua, let's store a binary tree:</p>
 
 <pre>
 CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
 </pre>
 
-which we can fill using:</p>
+<p>which we can fill using:</p>
 
 <pre>
 CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
@@ -662,7 +662,7 @@ SOFTWARE.</p>
 &nbsp; :: &nbsp;
 <a href="http://jigsaw.w3.org/css-validator/check/referer">Valid CSS</a>
 <br />
-Last modified: $Date: 2008/01/06 03:47:09 $, $Author: carvalho $.
+Last modified: $Date: 2008/01/07 23:41:50 $, $Author: carvalho $.
 </p>
 </div>
 
