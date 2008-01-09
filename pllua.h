@@ -1,9 +1,9 @@
 /*
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
- * Version: 0.1
+ * Version: 0.2
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.9 2008/01/06 03:46:52 carvalho Exp $
+ * $Id: pllua.h,v 1.10 2008/01/09 17:56:18 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -28,6 +28,7 @@
 
 /* call handler API */
 lua_State *luaP_newstate (int trusted, MemoryContext memctxt);
+Datum luaP_validator (lua_State *L, Oid oid);
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo);
 /* general API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
