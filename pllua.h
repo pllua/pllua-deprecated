@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.2
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.10 2008/01/09 17:56:18 carvalho Exp $
+ * $Id: pllua.h,v 1.11 2008/01/14 16:29:48 carvalho Exp $
  */
 
 /* PostgreSQL */

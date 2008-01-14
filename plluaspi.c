@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.12 2008/01/09 17:56:19 carvalho Exp $
+ * $Id: plluaspi.c,v 1.13 2008/01/14 16:29:48 carvalho Exp $
  */
 
 #include "pllua.h"

@@ -1,22 +1,17 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.6 2008/01/09 17:56:18 carvalho Exp $
+# $Id: Makefile,v 1.7 2008/01/14 16:29:48 carvalho Exp $
 
 # Lua specific
-PG_CPPFLAGS = -I/usr/include/lua5.1
-LUALIB = lua5.1 # lua
+LUAINC = -I/usr/include/lua5.1
+LUALIB = -llua5.1
 
 # no need to edit below here
-
-MODULES = pllua plluau
+MODULE_big = pllua
 DATA_built = pllua.sql
-EXTRA_CLEAN = plluaapi.o plluaspi.o
+OBJS = pllua.o plluaapi.o plluaspi.o
+PG_CPPFLAGS = $(LUAINC)
+SHLIB_LINK = $(LUALIB)
 
 PGXS := $(shell pg_config --pgxs)
 include $(PGXS)
-
-pllua.so : pllua.o plluaapi.o plluaspi.o
-	$(CC) -shared -o $@ $^ -l$(LUALIB)
-
-plluau.so : plluau.o plluaapi.o plluaspi.o
-	$(CC) -shared -o $@ $^ -l$(LUALIB)
 
