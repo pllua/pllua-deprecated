@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.12 2008/01/14 16:29:48 carvalho Exp $
+ * $Id: plluaapi.c,v 1.13 2008/02/08 03:06:42 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -28,17 +28,8 @@ typedef struct luaP_Info {
   "and tablename='init'"
 #define PLLUA_INIT_LIST "select module from pllua.init"
 
-/* from catalog/pg_type.h */
-#define BOOLARRAYOID 1000
-#define INT2ARRAYOID 1005
-#define TEXTARRAYOID 1009
-#define INT8ARRAYOID 1016
-#define FLOAT8ARRAYOID 1022
-
 #define MaxArraySize ((Size) (MaxAllocSize / sizeof(Datum)))
 
-#define info(msg) ereport(INFO, \
-    (errcode(ERRCODE_SUCCESSFUL_COMPLETION), errmsg msg))
 /* input */
 #define text2string(d) DatumGetCString(DirectFunctionCall1(textout, (d)))
 #define varchar2string(d) DatumGetCString(DirectFunctionCall1(varcharout, (d)))
@@ -55,9 +46,12 @@ typedef struct luaP_Info {
   DirectFunctionCall3(numeric_in, CStringGetDatum((s)), \
       ObjectIdGetDatum(NUMERICOID), Int32GetDatum(VARHDRSZ + (l)))
 
-/* VARATT_SIZEP is deprecated in PostgreSQL 8.3 */
-#ifndef SET_VARSIZE
+/* back compatibility to 8.2 */
+#if PG_VERSION_NUM < 80300
 #define SET_VARSIZE(ptr, len) VARATT_SIZEP(ptr) = len
+#define att_addlength_pointer(len, typ, ptr) \
+  att_addlength(len, typ, PointerGetDatum(ptr))
+#define att_align_nominal(len, typ) att_align(len, typ)
 #endif
 
 /* string2text is simpler, so we implement it here with allocation in upper
@@ -78,8 +72,8 @@ static Datum varlenacopy (Datum dat, int len) {
   return PointerGetDatum(copy);
 }
 
-#define luaP_gettypechar(o) ((luaP_gettypeinfo((o))).typtype)
-#define luaP_gettypeelem(o) ((luaP_gettypeinfo((o))).typelem)
+#define info(msg) ereport(INFO, \
+    (errcode(ERRCODE_SUCCESSFUL_COMPLETION), errmsg msg))
 #define luaP_error(L, tag) \
         ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
              errmsg("[pllua]: " tag " error"), \
@@ -418,7 +412,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
   fi->oid = oid;
   /* read arg types */
   for (i = 0; i < nargs; i++) {
-    type = luaP_gettypechar(argtype[i]);
+    type = luaP_gettypeinfo(argtype[i]).typtype;
     if (type == 'p') /* pseudo-type? */
       ereport(ERROR,
           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -427,7 +421,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
     fi->arg[i] = argtype[i];
   }
   /* read result type */
-  type = luaP_gettypechar(rettype);
+  type = luaP_gettypeinfo(rettype).typtype;
   if (type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -555,8 +549,8 @@ static void luaP_pusharray (lua_State *L, char **p, int ndims,
         luaP_pushdatum(L, fetch_att(*p, typeinfo->typbyval, typeinfo->typlen),
             typeelem);
         lua_rawseti(L, -2, (*lb) + i);
-        *p = att_addlength(*p, typeinfo->typlen, PointerGetDatum(*p));
-        *p = (char *) att_align(*p, typeinfo->typalign);
+        *p = att_addlength_pointer(*p, typeinfo->typlen, *p);
+        *p = (char *) att_align_nominal(*p, typeinfo->typalign);
       }
       if (*bitmap) {
         *bitmask <<= 1;
@@ -577,7 +571,17 @@ static void luaP_pusharray (lua_State *L, char **p, int ndims,
 }
 
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
+  FormData_pg_type typeinfo = luaP_gettypeinfo(type);
+#if PG_VERSION_NUM >= 80300
+  if (typeinfo.typtype == 'e') { /* enum? */
+    lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat)); /* 4-byte long */
+    return;
+  }
+#endif
+  if (typeinfo.typtype == 'd') /* domain? */
+    type = typeinfo.typbasetype;
   switch(type) {
+    /* base and domain types */
     case BOOLOID:
       lua_pushboolean(L, (int) (dat != 0));
       break;
@@ -616,46 +620,42 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       else lua_pushnil(L);
       break;
     }
-    case BOOLARRAYOID:
-    case FLOAT4ARRAYOID:
-    case FLOAT8ARRAYOID:
-    case INT2ARRAYOID:
-    case INT4ARRAYOID:
-    case INT8ARRAYOID:
-    case TEXTARRAYOID: {
-      ArrayType *arr = DatumGetArrayTypeP(dat);
-      char *p = ARR_DATA_PTR(arr);
-      bits8 *bitmap = ARR_NULLBITMAP(arr);
-      int bitmask = 1;
-      Oid typeelem = luaP_gettypeelem(type);
-      FormData_pg_type typeinfo = luaP_gettypeinfo(typeelem);
-      luaP_pusharray(L, &p, ARR_NDIM(arr), ARR_DIMS(arr), ARR_LBOUND(arr),
-          &bitmap, &bitmask, &typeinfo, typeelem);
-      break;
-    }
+    /* non-base types */
     default: {
-      TupleDesc tupdesc = luaP_gettupledesc(type);
-      if (tupdesc == NULL) /* not a tuple? */
-        elog(ERROR, "[pllua]: type '%s' (%d) not supported as argument",
-            format_type_be(type), type);
-      else {
-        HeapTupleHeader tup = DatumGetHeapTupleHeader(dat);
-        int i;
-        const char *key;
-        bool isnull;
-        Datum value;
-        lua_createtable(L, 0, tupdesc->natts);
-        for (i = 0; i < tupdesc->natts; i++) {
-          key = NameStr(tupdesc->attrs[i]->attname);
-          value = GetAttributeByNum(tup, tupdesc->attrs[i]->attnum, &isnull);
-          if (!isnull) {
-            luaP_pushdatum(L, value, tupdesc->attrs[i]->atttypid);
-            lua_setfield(L, -2, key);
-          }
-        }
-        ReleaseTupleDesc(tupdesc);
+      Oid typeelem = typeinfo.typelem;
+      if (typeelem != 0 && typeinfo.typlen == -1) { /* array? */
+        ArrayType *arr = DatumGetArrayTypeP(dat);
+        char *p = ARR_DATA_PTR(arr);
+        bits8 *bitmap = ARR_NULLBITMAP(arr);
+        int bitmask = 1;
+        FormData_pg_type typeeleminfo = luaP_gettypeinfo(typeelem);
+        luaP_pusharray(L, &p, ARR_NDIM(arr), ARR_DIMS(arr), ARR_LBOUND(arr),
+            &bitmap, &bitmask, &typeeleminfo, typeelem);
       }
-      break;
+      else {
+        TupleDesc tupdesc = luaP_gettupledesc(type);
+        if (tupdesc == NULL) /* not a tuple? */
+          elog(ERROR, "[pllua]: type '%s' (%d) not supported as argument",
+              format_type_be(type), type);
+        else {
+          HeapTupleHeader tup = DatumGetHeapTupleHeader(dat);
+          int i;
+          const char *key;
+          bool isnull;
+          Datum value;
+          lua_createtable(L, 0, tupdesc->natts);
+          for (i = 0; i < tupdesc->natts; i++) {
+            Form_pg_attribute att = tupdesc->attrs[i];
+            key = NameStr(att->attname);
+            value = GetAttributeByNum(tup, att->attnum, &isnull);
+            if (!isnull) {
+              luaP_pushdatum(L, value, att->atttypid);
+              lua_setfield(L, -2, key);
+            }
+          }
+          ReleaseTupleDesc(tupdesc);
+        }
+      }
     }
   }
 }
@@ -720,12 +720,13 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
       }
       else {
         bool isnull;
-        Datum v = luaP_todatum(L, typeelem, len, &isnull);
+        Datum d = luaP_todatum(L, typeelem, len, &isnull);
+        Pointer v = DatumGetPointer(d);
         n = 0;
         if (typeinfo->typlen == -1) /* varlena? */
-          v = PointerGetDatum(PG_DETOAST_DATUM(v));
-        size = att_addlength(size, typeinfo->typlen, v);
-        size = att_align(size, typeinfo->typalign);
+          v = (Pointer) PG_DETOAST_DATUM(d);
+        size = att_addlength_pointer(size, typeinfo->typlen, v);
+        size = att_align_nominal(size, typeinfo->typalign);
         if (size > MaxAllocSize)
           elog(ERROR, "[pllua]: array size exceeds the maximum allowed");
       }
@@ -747,24 +748,26 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
   bool isnull;
   if (ndims == 1) { /* vector? */
     for (i = 0; i < (*dims); i++) {
-      Datum v;
+      Pointer v;
       lua_rawgeti(L, -1, (*lb) + i);
-      v = luaP_todatum(L, typeelem, len, &isnull);
+      v = DatumGetPointer(luaP_todatum(L, typeelem, len, &isnull));
       if (!isnull) {
         *bitval |= *bitmask;
         if (typeinfo->typlen > 0) {
-          if (typeinfo->typbyval) store_att_byval(*p, v, typeinfo->typlen);
-          else memmove(*p, DatumGetPointer(v), typeinfo->typlen);
-          *p += att_align(typeinfo->typlen, typeinfo->typalign);
+          if (typeinfo->typbyval)
+            store_att_byval(*p, PointerGetDatum(v), typeinfo->typlen);
+          else
+            memmove(*p, v, typeinfo->typlen);
+          *p += att_align_nominal(typeinfo->typlen, typeinfo->typalign);
         }
         else {
           int inc;
           Assert(!typeinfo->typbyval);
-          inc = att_addlength(0, typeinfo->typlen, v);
-          memmove(*p, DatumGetPointer(v), inc);
-          *p += att_align(inc, typeinfo->typalign);
+          inc = att_addlength_pointer(0, typeinfo->typlen, v);
+          memmove(*p, v, inc);
+          *p += att_align_nominal(inc, typeinfo->typalign);
         }
-        if (!typeinfo->typbyval) pfree(DatumGetPointer(v));
+        if (!typeinfo->typbyval) pfree(v);
       }
       else
         if (!(*bitmap))
@@ -796,7 +799,14 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
   *isnull = lua_isnil(L, -1);
   if (!(*isnull || type == VOIDOID)) {
     FormData_pg_type typeinfo = luaP_gettypeinfo(type);
+#if PG_VERSION_NUM >= 80300
+    if (typeinfo.typtype == 'e') /* enum? */
+      return Int32GetDatum(lua_tointeger(L, -1));
+#endif
+    if (typeinfo.typtype == 'd') /* domain? */
+      type = typeinfo.typbasetype;
     switch(type) {
+      /* base and domain types */
       case BOOLOID:
         dat = BoolGetDatum(lua_toboolean(L, -1));
         break;
@@ -853,100 +863,93 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull) {
         dat = string2text(cursor->name);
         break;
       }
-      case BOOLARRAYOID:
-      case FLOAT4ARRAYOID:
-      case FLOAT8ARRAYOID:
-      case INT2ARRAYOID:
-      case INT4ARRAYOID:
-      case INT8ARRAYOID:
-      case TEXTARRAYOID: {
-        FormData_pg_type typeeleminfo;
-        Oid typeelem;
-        int ndims, dims[MAXDIM], lb[MAXDIM];
-        int i, size;
-        bool hasnulls;
-        ArrayType *a;
-        if (lua_type(L, -1) != LUA_TTABLE)
-          elog(ERROR, "[pllua]: table expected for array conversion, got %s",
-              lua_typename(L, lua_type(L, -1)));
-        typeelem = luaP_gettypeelem(type);
-        typeeleminfo = luaP_gettypeinfo(typeelem);
-        for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = -1;
-        size = luaP_getarraydims(L, &ndims, dims, lb, &typeeleminfo, typeelem,
-            len, &hasnulls);
-        if (size == 0) { /* empty array? */
-          a = (ArrayType *) SPI_palloc(sizeof(ArrayType));
-          a->size = sizeof(ArrayType);
-          a->ndim = 0;
-          a->dataoffset = 0;
-          a->elemtype = typeelem;
-        }
-        else {
-          int nitems = 1;
-          int offset;
-          char *p;
-          bits8 *bitmap;
-          int bitmask = 1;
-          int bitval = 0;
-          for (i = 0; i < ndims; i++) {
-            nitems *= dims[i];
-            if (nitems > MaxArraySize)
-              elog(ERROR, "[pllua]: array size exceeds maximum allowed");
-          }
-          if (hasnulls) {
-            offset = ARR_OVERHEAD_WITHNULLS(ndims, nitems);
-            size += offset;
+      default: {
+        Oid typeelem = typeinfo.typelem;
+        if (typeelem != 0 && typeinfo.typlen == -1) { /* array? */
+          FormData_pg_type typeeleminfo;
+          int ndims, dims[MAXDIM], lb[MAXDIM];
+          int i, size;
+          bool hasnulls;
+          ArrayType *a;
+          if (lua_type(L, -1) != LUA_TTABLE)
+            elog(ERROR, "[pllua]: table expected for array conversion, got %s",
+                lua_typename(L, lua_type(L, -1)));
+          typeeleminfo = luaP_gettypeinfo(typeelem);
+          for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = -1;
+          size = luaP_getarraydims(L, &ndims, dims, lb, &typeeleminfo,
+              typeelem, len, &hasnulls);
+          if (size == 0) { /* empty array? */
+            a = (ArrayType *) SPI_palloc(sizeof(ArrayType));
+            SET_VARSIZE(a, sizeof(ArrayType));
+            a->ndim = 0;
+            a->dataoffset = 0;
+            a->elemtype = typeelem;
           }
           else {
-            offset = 0;
-            size += ARR_OVERHEAD_NONULLS(ndims);
+            int nitems = 1;
+            int offset;
+            char *p;
+            bits8 *bitmap;
+            int bitmask = 1;
+            int bitval = 0;
+            for (i = 0; i < ndims; i++) {
+              nitems *= dims[i];
+              if (nitems > MaxArraySize)
+                elog(ERROR, "[pllua]: array size exceeds maximum allowed");
+            }
+            if (hasnulls) {
+              offset = ARR_OVERHEAD_WITHNULLS(ndims, nitems);
+              size += offset;
+            }
+            else {
+              offset = 0;
+              size += ARR_OVERHEAD_NONULLS(ndims);
+            }
+            a = (ArrayType *) SPI_palloc(size);
+            SET_VARSIZE(a, size);
+            a->ndim = ndims;
+            a->dataoffset = offset;
+            a->elemtype = typeelem;
+            memcpy(ARR_DIMS(a), dims, ndims * sizeof(int));
+            memcpy(ARR_LBOUND(a), lb, ndims * sizeof(int));
+            p = ARR_DATA_PTR(a);
+            bitmap = ARR_NULLBITMAP(a);
+            luaP_toarray(L, &p, ndims, dims, lb, &bitmap, &bitmask, &bitval,
+                &typeeleminfo, typeelem, len);
           }
-          a = (ArrayType *) SPI_palloc(size);
-          a->size = size;
-          a->ndim = ndims;
-          a->dataoffset = offset;
-          a->elemtype = typeelem;
-          memcpy(ARR_DIMS(a), dims, ndims * sizeof(int));
-          memcpy(ARR_LBOUND(a), lb, ndims * sizeof(int));
-          p = ARR_DATA_PTR(a);
-          bitmap = ARR_NULLBITMAP(a);
-          luaP_toarray(L, &p, ndims, dims, lb, &bitmap, &bitmask, &bitval,
-              &typeeleminfo, typeelem, len);
+          dat = PointerGetDatum(a);
         }
-        dat = PointerGetDatum(a);
-        break;
-      }
-      default: {
-        TupleDesc typedesc = luaP_gettupledesc(type);
-        if (typedesc == NULL)
-          elog(ERROR, "[pllua]: type '%s' not supported as result",
-              format_type_be(type));
         else {
-          int i;
-          Datum *values;
-          bool *nulls;
-          if (lua_type(L, -1) != LUA_TTABLE)
-            elog(ERROR, "[pllua]: table expected for record result, got %s",
-                lua_typename(L, lua_type(L, -1)));
-          /* create tuple */
-          values = palloc(typedesc->natts * sizeof(Datum));
-          nulls = palloc(typedesc->natts * sizeof(bool));
-          for (i = 0; i < typedesc->natts; i++) {
-            lua_getfield(L, -1, NameStr(typedesc->attrs[i]->attname));
-            /* only simple types allowed in record */
-            values[i] = luaP_todatum(L, typedesc->attrs[i]->atttypid,
-                typedesc->attrs[i]->atttypmod, nulls + i);
-            lua_pop(L, 1);
+          TupleDesc typedesc = luaP_gettupledesc(type);
+          if (typedesc == NULL)
+            elog(ERROR, "[pllua]: type '%s' not supported as result",
+                format_type_be(type));
+          else {
+            int i;
+            Datum *values;
+            bool *nulls;
+            if (lua_type(L, -1) != LUA_TTABLE)
+              elog(ERROR, "[pllua]: table expected for record result, got %s",
+                  lua_typename(L, lua_type(L, -1)));
+            /* create tuple */
+            values = palloc(typedesc->natts * sizeof(Datum));
+            nulls = palloc(typedesc->natts * sizeof(bool));
+            for (i = 0; i < typedesc->natts; i++) {
+              lua_getfield(L, -1, NameStr(typedesc->attrs[i]->attname));
+              /* only simple types allowed in record */
+              values[i] = luaP_todatum(L, typedesc->attrs[i]->atttypid,
+                  typedesc->attrs[i]->atttypmod, nulls + i);
+              lua_pop(L, 1);
+            }
+            /* make copy in upper executor memory context */
+            typedesc = BlessTupleDesc(typedesc);
+            dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(typedesc,
+                    values, nulls), typedesc));
+            ReleaseTupleDesc(typedesc);
+            pfree(nulls);
+            pfree(values);
           }
-          /* make copy in upper executor memory context */
-          typedesc = BlessTupleDesc(typedesc);
-          dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(typedesc,
-                  values, nulls), typedesc));
-          ReleaseTupleDesc(typedesc);
-          pfree(nulls);
-          pfree(values);
         }
-        break;
       }
     }
   }

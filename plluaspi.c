@@ -2,10 +2,15 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.13 2008/01/14 16:29:48 carvalho Exp $
+ * $Id: plluaspi.c,v 1.14 2008/02/08 03:06:42 carvalho Exp $
  */
 
 #include "pllua.h"
+
+#ifndef SPI_prepare_cursor
+#define SPI_prepare_cursor(cmd, nargs, argtypes, copts) \
+  SPI_prepare(cmd, nargs, argtypes)
+#endif
 
 #define SPI_plan void
 #define PLLUA_BUFFER "_luaP_Buffer"
@@ -325,6 +330,27 @@ static int luaP_cursormove (lua_State *L) {
   return 0;
 }
 
+#if PG_VERSION_NUM >= 80300
+static int luaP_cursorposfetch (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
+  SPI_scroll_cursor_fetch(c->cursor, fd, luaL_optlong(L, 2, FETCH_ALL));
+  if (SPI_processed > 0) /* any rows? */
+    luaP_pushtuptable(L, c->cursor);
+  else
+    lua_pushnil(L);
+  return 1;
+}
+
+static int luaP_cursorposmove (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
+  SPI_scroll_cursor_move(c->cursor, fd, luaL_optlong(L, 2, 0));
+  return 0;
+}
+#endif
+
+
 static int luaP_cursorclose (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
   SPI_cursor_close(c->cursor);
@@ -414,8 +440,13 @@ static int luaP_getcursorplan (lua_State *L) {
 /* ======= SPI ======= */
 
 static Oid luaP_gettypeoid (const char *typename) {
+#if PG_VERSION_NUM < 80300
   List *namelist = stringToQualifiedNameList(typename, NULL);
   HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist));
+#else
+  List *namelist = stringToQualifiedNameList(typename);
+  HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist), NULL);
+#endif
   Oid typeoid = HeapTupleGetOid(typetup);
   ReleaseSysCache(typetup);
   list_free(namelist);
@@ -424,13 +455,14 @@ static Oid luaP_gettypeoid (const char *typename) {
 
 static int luaP_prepare (lua_State *L) {
   const char *q = luaL_checkstring(L, 1);
-  int nargs;
+  int nargs, cursoropt;
   luaP_Plan *p;
   if (lua_isnoneornil(L, 2)) nargs = 0;
   else {
     if (lua_type(L, 2) != LUA_TTABLE) luaL_typerror(L, 2, "table");
     nargs = lua_objlen(L, 2);
   }
+  cursoropt = luaL_optinteger(L, 3, 0);
   p = (luaP_Plan *) lua_newuserdata(L,
       sizeof(luaP_Plan) + nargs * sizeof(Oid));
   p->issaved = 0;
@@ -449,7 +481,7 @@ static int luaP_prepare (lua_State *L) {
       lua_pop(L, 1);
     }
   }
-  p->plan = SPI_prepare(q, nargs, p->type);
+  p->plan = SPI_prepare_cursor(q, nargs, p->type, cursoropt);
   if (SPI_result < 0)
     return luaL_error(L, "SPI_prepare error: %d", SPI_result);
   luaL_getmetatable(L, PLLUA_PLANMT);
@@ -491,6 +523,10 @@ static const luaL_reg luaP_Plan_funcs[] = {
 static const luaL_reg luaP_Cursor_funcs[] = {
   {"fetch", luaP_cursorfetch},
   {"move", luaP_cursormove},
+#if PG_VERSION_NUM >= 80300
+  {"posfetch", luaP_cursorposfetch},
+  {"posmove", luaP_cursorposmove},
+#endif
   {"close", luaP_cursorclose},
   {NULL, NULL}
 };
@@ -554,6 +590,22 @@ void luaP_registerspi (lua_State *L) {
   lua_pop(L, 1);
   /* SPI */
   lua_newtable(L);
+#if PG_VERSION_NUM >= 80300
+  lua_newtable(L); /* cursor options */
+  lua_pushinteger(L, CURSOR_OPT_BINARY);
+  lua_setfield(L, -2, "binary");
+  lua_pushinteger(L, CURSOR_OPT_SCROLL);
+  lua_setfield(L, -2, "scroll");
+  lua_pushinteger(L, CURSOR_OPT_NO_SCROLL);
+  lua_setfield(L, -2, "noscroll");
+  lua_pushinteger(L, CURSOR_OPT_INSENSITIVE);
+  lua_setfield(L, -2, "insensitive");
+  lua_pushinteger(L, CURSOR_OPT_HOLD); /* ignored */
+  lua_setfield(L, -2, "hold");
+  lua_pushinteger(L, CURSOR_OPT_FAST_PLAN);
+  lua_setfield(L, -2, "fastplan");
+  lua_setfield(L, -2, "option");
+#endif
   luaL_register(L, NULL, luaP_SPI_funcs);
 }
 
