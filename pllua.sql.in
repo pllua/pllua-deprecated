@@ -1,4 +1,4 @@
--- $Id: pllua.sql.in,v 1.1 2008/01/14 16:30:46 carvalho Exp $
+-- $Id: pllua.sql.in,v 1.2 2008/02/24 15:41:02 carvalho Exp $
 
 CREATE FUNCTION pllua_call_handler()
   RETURNS language_handler AS '$libdir/pllua'
@@ -24,8 +24,10 @@ CREATE LANGUAGE plluau
   HANDLER plluau_call_handler
   VALIDATOR plluau_validator;
 
-CREATE SCHEMA pllua
-  CREATE TABLE init (module text);
+-- Optional:
+
+--CREATE SCHEMA pllua
+--  CREATE TABLE init (module text);
 
 -- PL template installation:
 

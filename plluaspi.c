@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.14 2008/02/08 03:06:42 carvalho Exp $
+ * $Id: plluaspi.c,v 1.15 2008/02/24 15:41:02 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -14,11 +14,11 @@
 
 #define SPI_plan void
 #define PLLUA_BUFFER "_luaP_Buffer"
-#define PLLUA_TUPLEMT "luaP_Tuple"
 #define PLLUA_TUPTABLE "_luaP_Tuptable"
-#define PLLUA_PLANMT "luaP_Plan"
-#define PLLUA_CURSORMT "luaP_Cursor"
-#define PLLUA_TUPTABLEMT "luaP_Tuptable"
+#define PLLUA_TUPLEMT "tuple"
+#define PLLUA_PLANMT "plan"
+#define PLLUA_CURSORMT "cursor"
+#define PLLUA_TUPTABLEMT "tuptable"
 
 typedef struct luaP_Buffer {
   int size;
@@ -212,7 +212,7 @@ static HeapTuple luaP_copytuple (luaP_Tuple *t) {
   return tuple;
 }
 
-/* tuple in top of stack */
+/* tuple on top of stack */
 HeapTuple luaP_totuple (lua_State *L) {
   HeapTuple tuple = NULL;
   luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, -1);
