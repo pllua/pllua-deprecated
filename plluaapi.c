@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.14 2008/02/24 15:41:02 carvalho Exp $
+ * $Id: plluaapi.c,v 1.15 2008/03/25 17:22:24 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -18,6 +18,29 @@ typedef struct luaP_Info {
   lua_State *L; /* thread for SETOF iterator */
   Oid arg[1];
 } luaP_Info;
+
+/* extended type info */
+typedef struct luaP_Typeinfo {
+  int oid;
+  int2 len;
+  char type;
+  char align;
+  bool byval;
+  Oid elem;
+  FmgrInfo *input;
+  FmgrInfo *output;
+  TupleDesc tupdesc;
+  int ismodule;
+} luaP_Typeinfo;
+
+/* raw datum */
+typedef struct luaP_Datum {
+  Pointer dp; /* datum pointer */
+  luaP_Typeinfo *ti;
+} luaP_Datum;
+
+static const char PLLUA_TYPEINFO[] = "typeinfo";
+static const char PLLUA_DATUM[] = "datum";
 
 #define PLLUA_LOCALVAR "upvalue"
 #define PLLUA_LOCALVARSZ 7
@@ -68,9 +91,9 @@ static Datum string2text (const char *str) {
 }
 
 /* copy dat to upper memory context */
-static Datum datumcopy (Datum dat, FormData_pg_type info) {
-  if (info.typbyval == 'f') {
-    Size l = datumGetSize(dat, false, info.typlen);
+static Datum datumcopy (Datum dat, luaP_Typeinfo *ti) {
+  if (!ti->byval) { /* by reference? */
+    Size l = datumGetSize(dat, false, ti->len);
     void *copy = SPI_palloc(l);
     memcpy(copy, DatumGetPointer(dat), l);
     return PointerGetDatum(copy);
@@ -78,6 +101,84 @@ static Datum datumcopy (Datum dat, FormData_pg_type info) {
   return dat;
 }
 
+
+/* ======= Type ======= */
+
+static int luaP_typeinfogc (lua_State *L) {
+  luaP_Typeinfo *ti = lua_touserdata(L, 1);
+  pfree(ti->input);
+  pfree(ti->output);
+  if (ti->tupdesc) FreeTupleDesc(ti->tupdesc);
+  return 0;
+}
+
+static luaP_Typeinfo *luaP_gettypeinfo (lua_State *L, int oid) {
+  luaP_Typeinfo *ti;
+  lua_pushinteger(L, oid);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if (lua_isnil(L, -1)) { /* not cached? */
+    HeapTuple type;
+    Form_pg_type typeinfo;
+    /* query system */
+    type = SearchSysCache(TYPEOID, ObjectIdGetDatum(oid), 0, 0, 0);
+    if (!HeapTupleIsValid(type))
+      elog(ERROR, "[pllua]: cache lookup failed for type %u", oid);
+    typeinfo = (Form_pg_type) GETSTRUCT(type);
+    /* cache */
+    ti = lua_newuserdata(L, sizeof(luaP_Typeinfo) + 2 * sizeof(FmgrInfo));
+    ti->len = typeinfo->typlen;
+    ti->type = typeinfo->typtype;
+    ti->align = typeinfo->typalign;
+    ti->byval = typeinfo->typbyval;
+    ti->elem = typeinfo->typelem;
+    ti->input = (FmgrInfo *) (ti + 1);
+    ti->output = ti->input + 1;
+    fmgr_info_cxt(typeinfo->typinput, ti->input, TopMemoryContext);
+    fmgr_info_cxt(typeinfo->typoutput, ti->output, TopMemoryContext);
+    ti->tupdesc = NULL;
+    if (ti->type == 'c') { /* complex? */
+      TupleDesc td = lookup_rowtype_tupdesc(oid, typeinfo->typtypmod);
+      MemoryContext m = MemoryContextSwitchTo(TopMemoryContext);
+      ti->tupdesc = CreateTupleDescCopyConstr(td);
+      MemoryContextSwitchTo(m);
+      BlessTupleDesc(ti->tupdesc);
+      ReleaseTupleDesc(td);
+    }
+    ReleaseSysCache(type);
+    lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
+    lua_rawget(L, LUA_REGISTRYINDEX); /* Typeinfo_MT */
+    lua_setmetatable(L, -2);
+    lua_pushinteger(L, oid);
+    lua_pushvalue(L, -2);
+    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[oid] = typeinfo */
+    lua_pop(L, 2); /* nil and typeinfo */
+  }
+  else {
+    ti = lua_touserdata(L, -1);
+    lua_pop(L, 1);
+  }
+  return ti;
+}
+
+/* ======= Datum ======= */
+
+static int luaP_datumtostring (lua_State *L) {
+  luaP_Datum *d = lua_touserdata(L, 1);
+  lua_pushstring(L, OutputFunctionCall(d->ti->output,
+        PointerGetDatum(d->dp)));
+  return 1;
+}
+
+static luaP_Datum *luaP_pushrawdatum (lua_State *L, Datum dat,
+    luaP_Typeinfo *ti) {
+  luaP_Datum *d = lua_newuserdata(L, sizeof(luaP_Datum));
+  d->dp = DatumGetPointer(dat);
+  d->ti = ti;
+  lua_pushlightuserdata(L, (void *) PLLUA_DATUM);
+  lua_rawget(L, LUA_REGISTRYINDEX); /* Datum_MT */
+  lua_setmetatable(L, -2);
+  return d;
+}
 
 /* ======= Trigger ======= */
 
@@ -276,6 +377,19 @@ static int luaP_warning (lua_State *L) {
   return 0;
 }
 
+static int luaP_fromstring (lua_State *L) {
+  int oid = luaP_gettypeoid(luaL_checkstring(L, 1));
+  const char *s = luaL_checkstring(L, 2);
+  luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
+  int inoid = oid;
+  Datum v;
+  /* from getTypeIOParam in lsyscache.c */
+  if (ti->type == 'b' && OidIsValid(ti->elem)) inoid = ti->elem;
+  v = InputFunctionCall(ti->input, (char *) s, inoid, 0); /* typmod = 0 */
+  luaP_pushdatum(L, v, oid);
+  return 1;
+}
+
 static const luaL_Reg luaP_funcs[] = {
   {"setshared", luaP_setshared},
   {"log", luaP_log},
@@ -283,6 +397,7 @@ static const luaL_Reg luaP_funcs[] = {
   {"info", luaP_info},
   {"notice", luaP_notice},
   {"warning", luaP_warning},
+  {"fromstring", luaP_fromstring},
   {NULL, NULL}
 };
 
@@ -308,6 +423,7 @@ static void *luaP_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
 lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
   int status;
   lua_State *L = lua_newstate(luaP_alloc, (void *) memctxt);
+  /* core libs */
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
       {"", luaopen_base},
@@ -338,6 +454,17 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
   }
   else
     luaL_openlibs(L);
+  /* setup typeinfo and raw datum MTs */
+  lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
+  lua_newtable(L); /* luaP_Typeinfo MT */
+  lua_pushcfunction(L, luaP_typeinfogc);
+  lua_setfield(L, -2, "__gc");
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  lua_pushlightuserdata(L, (void *) PLLUA_DATUM);
+  lua_newtable(L); /* luaP_Datum MT */
+  lua_pushcfunction(L, luaP_datumtostring);
+  lua_setfield(L, -2, "__tostring");
+  lua_rawset(L, LUA_REGISTRYINDEX);
   /* load pllua.init modules */
   status = luaP_modinit(L);
   if (status != 0) /* SPI or module loading error? */
@@ -384,17 +511,6 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
 
 /* ======= luaP_pushfunction ======= */
 
-static FormData_pg_type luaP_gettypeinfo (Oid typeoid) {
-  HeapTuple type;
-  FormData_pg_type typeinfo;
-  type = SearchSysCache(TYPEOID, ObjectIdGetDatum(typeoid), 0, 0, 0);
-  if (!HeapTupleIsValid(type))
-    elog(ERROR, "[pllua]: cache lookup failed for type %u", typeoid);
-  typeinfo = *((Form_pg_type) GETSTRUCT(type));
-  ReleaseSysCache(type);
-  return typeinfo;
-}
-
 static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
     Form_pg_proc procst) {
   Oid *argtype = procst->proargtypes.values;
@@ -402,13 +518,13 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
   bool isset = procst->proretset;
   luaP_Info *fi;
   int i;
-  char type;
+  luaP_Typeinfo *ti;
   fi = lua_newuserdata(L, sizeof(luaP_Info) + nargs * sizeof(Oid));
   fi->oid = oid;
   /* read arg types */
   for (i = 0; i < nargs; i++) {
-    type = luaP_gettypeinfo(argtype[i]).typtype;
-    if (type == 'p') /* pseudo-type? */
+    ti = luaP_gettypeinfo(L, argtype[i]);
+    if (ti->type == 'p') /* pseudo-type? */
       ereport(ERROR,
           (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
            errmsg("[pllua]: functions cannot take type '%s'",
@@ -416,8 +532,8 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
     fi->arg[i] = argtype[i];
   }
   /* read result type */
-  type = luaP_gettypeinfo(rettype).typtype;
-  if (type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
+  ti = luaP_gettypeinfo(L, rettype);
+  if (ti->type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
          errmsg("[pllua]: functions cannot return type '%s'",
@@ -431,8 +547,8 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
 
 /* test argument and return types, compile function, store it at registry,
  * and return info at the top of stack  */
-static luaP_Info *luaP_newfunction (lua_State *L, int oid, HeapTuple proc) {
-  luaP_Info *fi;
+static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
+    luaP_Info **fi) {
   int nargs; /* fcinfo->nargs */
   Form_pg_proc procst;
   bool isnull;
@@ -440,15 +556,18 @@ static luaP_Info *luaP_newfunction (lua_State *L, int oid, HeapTuple proc) {
   const char *s, *fname;
   text *t;
   luaL_Buffer b;
+  int init = (*fi == NULL); /* not initialized? */
   /* read proc info */
   procst = (Form_pg_proc) GETSTRUCT(proc);
   prosrc = SysCacheGetAttr(PROCOID, proc, Anum_pg_proc_prosrc, &isnull);
   if (isnull) elog(ERROR, "[pllua]: null prosrc");
   nargs = procst->pronargs;
   /* get info userdata */
-  lua_pushinteger(L, oid);
-  fi = luaP_newinfo(L, nargs, oid, procst);
-  lua_pushlightuserdata(L, (void *) fi);
+  if (init) {
+    lua_pushinteger(L, oid);
+    *fi = luaP_newinfo(L, nargs, oid, procst);
+  }
+  lua_pushlightuserdata(L, (void *) *fi);
   /* check #argnames */
   if (nargs > 0) {
     int nnames;
@@ -458,12 +577,12 @@ static luaP_Info *luaP_newfunction (lua_State *L, int oid, HeapTuple proc) {
       deconstruct_array(DatumGetArrayTypeP(argnames), TEXTOID, -1, false,
           'i', &argname, NULL, &nnames);
     if (nnames != nargs)
-      fi->vararg = 1;
+      (*fi)->vararg = 1;
     else { /* check empty names */
       int i;
-      for (i = 0; i < nnames && !fi->vararg; i++) {
+      for (i = 0; i < nnames && !(*fi)->vararg; i++) {
         if (VARSIZE(DatumGetTextP(argname[i])) == VARHDRSZ) /* empty? */
-          fi->vararg = 1;
+          (*fi)->vararg = 1;
       }
     }
   }
@@ -478,7 +597,7 @@ static luaP_Info *luaP_newfunction (lua_State *L, int oid, HeapTuple proc) {
   luaL_addlstring(&b, fname, strlen(fname));
   luaL_addlstring(&b, "=function(", 10);
   /* read arg names */
-  if (fi->vararg) luaL_addlstring(&b, "...", 3);
+  if ((*fi)->vararg) luaL_addlstring(&b, "...", 3);
   else {
     int i;
     for (i = 0; i < nargs; i++) {
@@ -501,16 +620,21 @@ static luaP_Info *luaP_newfunction (lua_State *L, int oid, HeapTuple proc) {
     luaP_error(L, "compile");
   lua_remove(L, -2); /* source */
   if (lua_pcall(L, 0, 1, 0)) luaP_error(L, "call");
-  rowstamp_set(&fi->stamp, proc); /* row-stamp info */
+  rowstamp_set(&(*fi)->stamp, proc); /* row-stamp info */
   lua_pushvalue(L, -1); /* func */
-  lua_insert(L, -5);
-  lua_rawset(L, LUA_REGISTRYINDEX); /* REG[light_info] = func */
-  lua_rawset(L, LUA_REGISTRYINDEX); /* REG[oid] = info */
-  return fi;
+  if (init) {
+    lua_insert(L, -5);
+    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[light_info] = func */
+    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[oid] = info */
+  }
+  else {
+    lua_insert(L, -3);
+    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[light_info] = func */
+  }
 }
 
 static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
-  luaP_Info *fi;
+  luaP_Info *fi = NULL;
   HeapTuple proc;
   proc = SearchSysCache(PROCOID, ObjectIdGetDatum((Oid) oid), 0, 0, 0);
   if (!HeapTupleIsValid(proc))
@@ -519,7 +643,7 @@ static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
   lua_rawget(L, LUA_REGISTRYINDEX);
   if (lua_isnil(L, -1)) { /* not interned? */
     lua_pop(L, 1); /* nil */
-    fi = luaP_newfunction(L, oid, proc);
+    luaP_newfunction(L, oid, proc, &fi);
   }
   else {
     fi = lua_touserdata(L, -1);
@@ -530,7 +654,7 @@ static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
     else {
       lua_pushnil(L);
       lua_rawset(L, LUA_REGISTRYINDEX); /* REG[old_light_info] = nil */
-      fi = luaP_newfunction(L, oid, proc);
+      luaP_newfunction(L, oid, proc, &fi);
     }
   }
   ReleaseSysCache(proc);
@@ -542,17 +666,16 @@ static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
 
 static void luaP_pusharray (lua_State *L, char **p, int ndims,
     int *dims, int *lb, bits8 **bitmap, int *bitmask,
-    Form_pg_type typeinfo, Oid typeelem) {
+    luaP_Typeinfo *ti, Oid typeelem) {
   int i;
   lua_newtable(L);
   if (ndims == 1) { /* vector? */
     for (i = 0; i < (*dims); i++) {
       if (*bitmap == NULL || ((**bitmap) & (*bitmask)) != 0) { /* not NULL? */
-        luaP_pushdatum(L, fetch_att(*p, typeinfo->typbyval, typeinfo->typlen),
-            typeelem);
+        luaP_pushdatum(L, fetch_att(*p, ti->byval, ti->len), typeelem);
         lua_rawseti(L, -2, (*lb) + i);
-        *p = att_addlength_pointer(*p, typeinfo->typlen, *p);
-        *p = (char *) att_align_nominal(*p, typeinfo->typalign);
+        *p = att_addlength_pointer(*p, ti->len, *p);
+        *p = (char *) att_align_nominal(*p, ti->align);
       }
       if (*bitmap) {
         *bitmask <<= 1;
@@ -566,7 +689,7 @@ static void luaP_pusharray (lua_State *L, char **p, int ndims,
   else { /* multidimensional array */
     for (i = 0; i < (*dims); i++) {
       luaP_pusharray(L, p, ndims - 1, dims + 1, lb + 1, bitmap, bitmask,
-          typeinfo, typeelem);
+          ti, typeelem);
       lua_rawseti(L, -2, (*lb) + i);
     }
   }
@@ -590,11 +713,6 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
     case INT4OID:
       lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat));
       break;
-    case NUMERICOID:
-      lua_pushstring(L, datum2string(dat, numeric_out));
-      lua_pushnumber(L, lua_tonumber(L, -1));
-      lua_replace(L, -2);
-      break;
     case TEXTOID:
       lua_pushstring(L, text2string(dat));
       break;
@@ -611,19 +729,17 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       break;
     }
     default: {
-      FormData_pg_type typeinfo = luaP_gettypeinfo(type);
-      switch (typeinfo.typtype) {
+      luaP_Typeinfo *ti = luaP_gettypeinfo(L, type);
+      switch (ti->type) {
         case 'c': { /* complex? */
-          TupleDesc tupdesc = lookup_rowtype_tupdesc(type,
-              typeinfo.typtypmod);
           HeapTupleHeader tup = DatumGetHeapTupleHeader(dat);
           int i;
           const char *key;
           bool isnull;
           Datum value;
-          lua_createtable(L, 0, tupdesc->natts);
-          for (i = 0; i < tupdesc->natts; i++) {
-            Form_pg_attribute att = tupdesc->attrs[i];
+          lua_createtable(L, 0, ti->tupdesc->natts);
+          for (i = 0; i < ti->tupdesc->natts; i++) {
+            Form_pg_attribute att = ti->tupdesc->attrs[i];
             key = NameStr(att->attname);
             value = GetAttributeByNum(tup, att->attnum, &isnull);
             if (!isnull) {
@@ -631,7 +747,6 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
               lua_setfield(L, -2, key);
             }
           }
-          ReleaseTupleDesc(tupdesc);
           break;
         }
         case 'p': /* pseudo? */
@@ -639,21 +754,17 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
           break;
         case 'b': /* base? */
         case 'd': /* domain? */
-          if (typeinfo.typelem != 0 && typeinfo.typlen == -1) { /* array? */
-            Oid typeelem = typeinfo.typelem;
+          if (ti->elem != 0 && ti->len == -1) { /* array? */
             ArrayType *arr = DatumGetArrayTypeP(dat);
             char *p = ARR_DATA_PTR(arr);
             bits8 *bitmap = ARR_NULLBITMAP(arr);
             int bitmask = 1;
-            FormData_pg_type typeeleminfo = luaP_gettypeinfo(typeelem);
+            luaP_Typeinfo *te = luaP_gettypeinfo(L, ti->elem);
             luaP_pusharray(L, &p, ARR_NDIM(arr), ARR_DIMS(arr), ARR_LBOUND(arr),
-                &bitmap, &bitmask, &typeeleminfo, typeelem);
+                &bitmap, &bitmask, te, ti->elem);
           }
-          else { /* TODO: custom types as modules */
-            FmgrInfo customout;
-            fmgr_info(typeinfo.typoutput, &customout);
-            lua_pushstring(L, OutputFunctionCall(&customout, dat));
-          }
+          else
+            luaP_pushrawdatum(L, dat, ti);
           break;
 #if PG_VERSION_NUM >= 80300
         case 'e': /* enum? */
@@ -681,7 +792,7 @@ static void luaP_pushargs (lua_State *L, FunctionCallInfo fcinfo,
 
 /* assume table is in top, returns size */
 static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
-    int *lb, Form_pg_type typeinfo, Oid typeelem, int typmod, bool *hasnulls) {
+    int *lb, luaP_Typeinfo *ti, Oid typeelem, int typmod, bool *hasnulls) {
   int size = 0;
   int nitems = 0;
   *ndims = -1;
@@ -712,7 +823,7 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
         if (*ndims > 1) {
           d = dims[1]; l = lb[1];
         }
-        size += luaP_getarraydims(L, &n, dims + 1, lb + 1, typeinfo, typeelem,
+        size += luaP_getarraydims(L, &n, dims + 1, lb + 1, ti, typeelem,
             typmod, hasnulls);
         if (*ndims > 1) { /* update dims and bounds? */
           if (l < lb[1]) {
@@ -730,10 +841,10 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
         Datum d = luaP_todatum(L, typeelem, typmod, &isnull);
         Pointer v = DatumGetPointer(d);
         n = 0;
-        if (typeinfo->typlen == -1) /* varlena? */
+        if (ti->len == -1) /* varlena? */
           v = (Pointer) PG_DETOAST_DATUM(d);
-        size = att_addlength_pointer(size, typeinfo->typlen, v);
-        size = att_align_nominal(size, typeinfo->typalign);
+        size = att_addlength_pointer(size, ti->len, v);
+        size = att_align_nominal(size, ti->align);
         if (size > MaxAllocSize)
           elog(ERROR, "[pllua]: array size exceeds the maximum allowed");
       }
@@ -750,7 +861,7 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
 
 static void luaP_toarray (lua_State *L, char **p, int ndims,
     int *dims, int *lb, bits8 **bitmap, int *bitmask, int *bitval,
-    Form_pg_type typeinfo, Oid typeelem, int typmod) {
+    luaP_Typeinfo *ti, Oid typeelem, int typmod) {
   int i;
   bool isnull;
   if (ndims == 1) { /* vector? */
@@ -760,21 +871,21 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
       v = DatumGetPointer(luaP_todatum(L, typeelem, typmod, &isnull));
       if (!isnull) {
         *bitval |= *bitmask;
-        if (typeinfo->typlen > 0) {
-          if (typeinfo->typbyval)
-            store_att_byval(*p, PointerGetDatum(v), typeinfo->typlen);
+        if (ti->len > 0) {
+          if (ti->byval)
+            store_att_byval(*p, PointerGetDatum(v), ti->len);
           else
-            memmove(*p, v, typeinfo->typlen);
-          *p += att_align_nominal(typeinfo->typlen, typeinfo->typalign);
+            memmove(*p, v, ti->len);
+          *p += att_align_nominal(ti->len, ti->align);
         }
         else {
           int inc;
-          Assert(!typeinfo->typbyval);
-          inc = att_addlength_pointer(0, typeinfo->typlen, v);
+          Assert(!ti->byval);
+          inc = att_addlength_pointer(0, ti->len, v);
           memmove(*p, v, inc);
-          *p += att_align_nominal(inc, typeinfo->typalign);
+          *p += att_align_nominal(inc, ti->align);
         }
-        if (!typeinfo->typbyval) pfree(v);
+        if (!ti->byval) pfree(v);
       }
       else
         if (!(*bitmap))
@@ -795,7 +906,7 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
     for (i = 0; i < (*dims); i++) {
       lua_rawgeti(L, -1, (*lb) + i);
       luaP_toarray(L, p, ndims - 1, dims + 1, lb + 1, bitmap,
-          bitmask, bitval, typeinfo, typeelem, typmod);
+          bitmask, bitval, ti, typeelem, typmod);
       lua_pop(L, 1);
     }
   }
@@ -828,69 +939,64 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
       case INT4OID:
         dat = Int32GetDatum(lua_tointeger(L, -1));
         break;
-      case TEXTOID:
-        dat = string2text(lua_tostring(L, -1));
+      case TEXTOID: {
+        const char *s = lua_tostring(L, -1);
+        if (s == NULL) elog(ERROR,
+            "[pllua]: string expected for datum conversion, got %s",
+            lua_typename(L, lua_type(L, -1)));
+        dat = string2text(s);
         break;
+      }
       case REFCURSOROID: {
         Portal cursor = luaP_tocursor(L, -1);
         dat = string2text(cursor->name);
         break;
       }
       default: {
-        FormData_pg_type typeinfo = luaP_gettypeinfo(type);
-        switch (typeinfo.typtype) {
+        luaP_Typeinfo *ti = luaP_gettypeinfo(L, type);
+        switch (ti->type) {
           case 'c': { /* complex? */
-            TupleDesc tupdesc = lookup_rowtype_tupdesc(type,
-                typeinfo.typtypmod);
             int i;
-            Datum *values;
-            bool *nulls;
+            luaP_Buffer *b;
             if (lua_type(L, -1) != LUA_TTABLE)
               elog(ERROR, "[pllua]: table expected for record result, got %s",
                   lua_typename(L, lua_type(L, -1)));
             /* create tuple */
-            values = palloc(tupdesc->natts * sizeof(Datum));
-            nulls = palloc(tupdesc->natts * sizeof(bool));
-            for (i = 0; i < tupdesc->natts; i++) {
-              lua_getfield(L, -1, NameStr(tupdesc->attrs[i]->attname));
+            b = luaP_getbuffer(L, ti->tupdesc->natts);
+            for (i = 0; i < ti->tupdesc->natts; i++) {
+              lua_getfield(L, -1, NameStr(ti->tupdesc->attrs[i]->attname));
               /* only simple types allowed in record */
-              values[i] = luaP_todatum(L, tupdesc->attrs[i]->atttypid,
-                  tupdesc->attrs[i]->atttypmod, nulls + i);
+              b->value[i] = luaP_todatum(L, ti->tupdesc->attrs[i]->atttypid,
+                  ti->tupdesc->attrs[i]->atttypmod, b->null + i);
               lua_pop(L, 1);
             }
             /* make copy in upper executor memory context */
-            tupdesc = BlessTupleDesc(tupdesc);
-            dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(tupdesc,
-                    values, nulls), tupdesc));
-            ReleaseTupleDesc(tupdesc);
-            pfree(nulls);
-            pfree(values);
+            dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(ti->tupdesc,
+                    b->value, b->null), ti->tupdesc));
             break;
           }
-          case 'p': /* pseudo? */
-            if (type != VOIDOID) resulterror(type);
-            break;
           case 'b': /* base? */
           case 'd': /* domain? */
-            if (typeinfo.typelem != 0 && typeinfo.typlen == -1) { /* array? */
-              FormData_pg_type typeeleminfo;
+            if (ti->elem != 0 && ti->len == -1) { /* array? */
+              luaP_Typeinfo *te;
               int ndims, dims[MAXDIM], lb[MAXDIM];
               int i, size;
               bool hasnulls;
               ArrayType *a;
               if (lua_type(L, -1) != LUA_TTABLE)
-                elog(ERROR, "[pllua]: table expected for array conversion, got %s",
+                elog(ERROR,
+                    "[pllua]: table expected for array conversion, got %s",
                     lua_typename(L, lua_type(L, -1)));
-              typeeleminfo = luaP_gettypeinfo(typeinfo.typelem);
+              te = luaP_gettypeinfo(L, ti->elem);
               for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = -1;
-              size = luaP_getarraydims(L, &ndims, dims, lb, &typeeleminfo,
-                  typeinfo.typelem, typmod, &hasnulls);
+              size = luaP_getarraydims(L, &ndims, dims, lb, te, ti->elem,
+                  typmod, &hasnulls);
               if (size == 0) { /* empty array? */
                 a = (ArrayType *) SPI_palloc(sizeof(ArrayType));
                 SET_VARSIZE(a, sizeof(ArrayType));
                 a->ndim = 0;
                 a->dataoffset = 0;
-                a->elemtype = typeinfo.typelem;
+                a->elemtype = ti->elem;
               }
               else {
                 int nitems = 1;
@@ -902,7 +1008,8 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
                 for (i = 0; i < ndims; i++) {
                   nitems *= dims[i];
                   if (nitems > MaxArraySize)
-                    elog(ERROR, "[pllua]: array size exceeds maximum allowed");
+                    elog(ERROR,
+                        "[pllua]: array size exceeds maximum allowed");
                 }
                 if (hasnulls) {
                   offset = ARR_OVERHEAD_WITHNULLS(ndims, nitems);
@@ -916,28 +1023,22 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
                 SET_VARSIZE(a, size);
                 a->ndim = ndims;
                 a->dataoffset = offset;
-                a->elemtype = typeinfo.typelem;
+                a->elemtype = ti->elem;
                 memcpy(ARR_DIMS(a), dims, ndims * sizeof(int));
                 memcpy(ARR_LBOUND(a), lb, ndims * sizeof(int));
                 p = ARR_DATA_PTR(a);
                 bitmap = ARR_NULLBITMAP(a);
-                luaP_toarray(L, &p, ndims, dims, lb, &bitmap, &bitmask, &bitval,
-                    &typeeleminfo, typeinfo.typelem, typmod);
+                luaP_toarray(L, &p, ndims, dims, lb, &bitmap, &bitmask,
+                    &bitval, te, ti->elem, typmod);
               }
               dat = PointerGetDatum(a);
             }
             else {
-              const char *s = lua_tostring(L, -1);
-              Oid inoid = type;
-              FmgrInfo customin;
-              /* from getTypeIOParam in lsyscache.c */
-              if (typeinfo.typtype == 'b' && OidIsValid(typeinfo.typelem))
-                inoid = typeinfo.typelem;
-              fmgr_info(typeinfo.typinput, &customin);
-              dat = InputFunctionCall(&customin, (char *) s, inoid, typmod);
-              dat = datumcopy(dat, typeinfo);
-              /*dat = datumcopy(InputFunctionCall(&customin,
-                    (char *) s, inoid, typmod), typeinfo);*/
+              luaP_Datum *d = luaP_toudata(L, -1, PLLUA_DATUM);
+              if (d == NULL) elog(ERROR,
+                  "[pllua]: raw datum expected for datum conversion, got %s",
+                  lua_typename(L, lua_type(L, -1)));
+              dat = datumcopy(PointerGetDatum(d->dp), ti);
             }
             break;
 #if PG_VERSION_NUM >= 80300
@@ -945,6 +1046,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
             dat = Int32GetDatum(lua_tointeger(L, -1));
             break;
 #endif
+          case 'p': /* pseudo? */
           default:
             resulterror(type);
         }
@@ -970,6 +1072,7 @@ Datum luaP_validator (lua_State *L, Oid oid) {
   PG_TRY();
   {
     luaP_pushfunction(L, (int) oid);
+    lua_pop(L, 1);
   }
   PG_CATCH();
   {
@@ -1023,7 +1126,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
               || (rsi->allowedModes & SFRM_ValuePerCall) == 0)
             ereport(ERROR,
                 (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                 errmsg("set-valued function called in context"
+                 errmsg("[pllua]: set-valued function called in context"
                    "that cannot accept a set")));
           rsi->returnMode = SFRM_ValuePerCall;
           fi->L = lua_newthread(L);

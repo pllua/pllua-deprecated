@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.15 2008/02/24 15:41:02 carvalho Exp $
+ * $Id: plluaspi.c,v 1.16 2008/03/25 17:22:24 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -13,18 +13,12 @@
 #endif
 
 #define SPI_plan void
-#define PLLUA_BUFFER "_luaP_Buffer"
-#define PLLUA_TUPTABLE "_luaP_Tuptable"
-#define PLLUA_TUPLEMT "tuple"
-#define PLLUA_PLANMT "plan"
-#define PLLUA_CURSORMT "cursor"
-#define PLLUA_TUPTABLEMT "tuptable"
-
-typedef struct luaP_Buffer {
-  int size;
-  Datum *value;
-  char *null;
-} luaP_Buffer;
+static const char PLLUA_BUFFER[] = "luaP_Buffer";
+static const char PLLUA_TUPTABLE[] = "luaP_Tuptable";
+static const char PLLUA_TUPLEMT[] = "tuple";
+static const char PLLUA_PLANMT[] = "plan";
+static const char PLLUA_CURSORMT[] = "cursor";
+static const char PLLUA_TUPTABLEMT[] = "tupletable";
 
 typedef struct luaP_Tuple {
   int changed;
@@ -56,7 +50,38 @@ typedef struct luaP_Plan {
 
 /* ======= Utils ======= */
 
-void luaP_pushdesctable(lua_State *L, TupleDesc desc) {
+#define luaP_getfield(L, s) \
+  lua_pushlightuserdata((L), (void *)(s)); \
+  lua_rawget((L), LUA_REGISTRYINDEX)
+
+static void luaP_newmetatable (lua_State *L, const char *tname) {
+  lua_newtable(L);
+  lua_pushlightuserdata(L, (void *) tname);
+  lua_pushvalue(L, -2);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+}
+
+void *luaP_toudata (lua_State *L, int ud, const char *tname) {
+  void *p = lua_touserdata(L, ud);
+  if (p != NULL) { /* value is userdata? */
+    if (lua_getmetatable(L, ud)) { /* does it have a metatable? */
+      luaP_getfield(L, tname); /* get metatable */
+      if (lua_rawequal(L, -1, -2)) { /* MTs match? */
+        lua_pop(L, 2); /* MTs */
+        return p;
+      }
+    }
+  }
+  return NULL;
+}
+
+static void *luaP_checkudata (lua_State *L, int ud, const char *tname) {
+  void *p = luaP_toudata(L, ud, tname);
+  if (p == NULL) luaL_typerror(L, ud, tname);
+  return p;
+}
+
+void luaP_pushdesctable (lua_State *L, TupleDesc desc) {
   int i;
   lua_newtable(L);
   for (i = 0; i < desc->natts; i++) {
@@ -68,19 +93,20 @@ void luaP_pushdesctable(lua_State *L, TupleDesc desc) {
 
 /* ======= Buffer ======= */
 
-static luaP_Buffer *luaP_getbuffer (lua_State *L, int n) {
+luaP_Buffer *luaP_getbuffer (lua_State *L, int n) {
   int i;
   luaP_Buffer *b;
-  lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_BUFFER);
+  luaP_getfield(L, PLLUA_BUFFER);
   b = (luaP_Buffer *) lua_touserdata(L, -1);
   lua_pop(L, 1);
   if (b == NULL || n > b->size) { /* resize? */
+    lua_pushlightuserdata(L, (void *) PLLUA_BUFFER);
     b = (luaP_Buffer *) lua_newuserdata(L, sizeof(luaP_Buffer)
         + n * (sizeof(Datum) + sizeof(char)));
     b->size = n;
     b->value = (Datum *) (b + 1);
     b->null = (char *) (b->value + n);
-    lua_setfield(L, LUA_REGISTRYINDEX, PLLUA_BUFFER);
+    lua_rawset(L, LUA_REGISTRYINDEX);
   }
   for (i = 0; i < n; i++) {
     b->value[i] = 0;
@@ -118,7 +144,8 @@ static int luaP_tupleindex (lua_State *L) {
   if (i >= 0) {
     if (t->changed == -1) { /* read-only? */
       bool isnull;
-      Datum v = heap_getattr(t->tuple, t->desc->attrs[i]->attnum, t->desc, &isnull);
+      Datum v = heap_getattr(t->tuple,
+          t->desc->attrs[i]->attnum, t->desc, &isnull);
       if (!isnull)
         luaP_pushdatum(L, v, t->desc->attrs[i]->atttypid);
       else lua_pushnil(L);
@@ -164,7 +191,7 @@ static int luaP_tuplegc (lua_State *L) {
 }
 
 static int luaP_tupletostring (lua_State *L) {
-  lua_pushfstring(L, "tuple: %p", lua_touserdata(L, 1));
+  lua_pushfstring(L, "%s: %p", PLLUA_TUPLEMT, lua_touserdata(L, 1));
   return 1;
 }
 
@@ -195,7 +222,7 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
   t->relid = relid;
   t->tuple = tuple;
   t->newtuple = NULL;
-  luaL_getmetatable(L, PLLUA_TUPLEMT);
+  luaP_getfield(L, PLLUA_TUPLEMT);
   lua_setmetatable(L, -2);
 }
 
@@ -218,7 +245,7 @@ HeapTuple luaP_totuple (lua_State *L) {
   luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, -1);
   if (t != NULL) {
     if (lua_getmetatable(L, -1)) {
-      lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_TUPLEMT);
+      luaP_getfield(L, PLLUA_TUPLEMT);
       if (lua_rawequal(L, -1, -2)) /* tuple? */
         tuple = (t->changed == 1) ? luaP_copytuple(t) : t->tuple;
       lua_pop(L, 2); /* metatables */
@@ -232,15 +259,16 @@ HeapTuple luaP_totuple (lua_State *L) {
 
 static void luaP_pushtuptable (lua_State *L, Portal cursor) {
   luaP_Tuptable *t;
-  lua_getfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
+  luaP_getfield(L, PLLUA_TUPTABLE);
   t = (luaP_Tuptable *) lua_touserdata(L, -1);
   if (t == NULL) { /* not initialized? */
     lua_pop(L, 1);
     t = (luaP_Tuptable *) lua_newuserdata(L, sizeof(luaP_Tuptable));
-    luaL_getmetatable(L, PLLUA_TUPTABLEMT);
+    luaP_getfield(L, PLLUA_TUPTABLEMT);
     lua_setmetatable(L, -2);
-    lua_pushvalue(L, -1); /* tuptable */
-    lua_setfield(L, LUA_REGISTRYINDEX, PLLUA_TUPTABLE);
+    lua_pushlightuserdata(L, (void *) PLLUA_TUPTABLE);
+    lua_pushvalue(L, -2); /* tuptable */
+    lua_rawset(L, LUA_REGISTRYINDEX);
   }
   t->size = SPI_processed;
   t->tuptable = SPI_tuptable;
@@ -289,7 +317,7 @@ static int luaP_tuptablegc (lua_State *L) {
 }
 
 static int luaP_tuptabletostring (lua_State *L) {
-  lua_pushfstring(L, "tupletable: %p", lua_touserdata(L, 1));
+  lua_pushfstring(L, "%s: %p", PLLUA_TUPTABLEMT, lua_touserdata(L, 1));
   return 1;
 }
 
@@ -299,23 +327,23 @@ static int luaP_tuptabletostring (lua_State *L) {
 void luaP_pushcursor (lua_State *L, Portal cursor) {
   luaP_Cursor *c = (luaP_Cursor *) lua_newuserdata(L, sizeof(luaP_Cursor));
   c->cursor = cursor;
-  luaL_getmetatable(L, PLLUA_CURSORMT);
+  luaP_getfield(L, PLLUA_CURSORMT);
   lua_setmetatable(L, -2);
 }
 
 Portal luaP_tocursor (lua_State *L, int pos) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, pos, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, pos, PLLUA_CURSORMT);
   return c->cursor;
 }
 
 static int luaP_cursortostring (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, 1);
-  lua_pushfstring(L, "cursor: %p [%s]", c, c->cursor->name);
+  lua_pushfstring(L, "%s: %p [%s]", PLLUA_CURSORMT, c, c->cursor->name);
   return 1;
 }
 
 static int luaP_cursorfetch (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   SPI_cursor_fetch(c->cursor, 1, luaL_optlong(L, 2, FETCH_ALL));
   if (SPI_processed > 0) /* any rows? */
     luaP_pushtuptable(L, c->cursor);
@@ -325,14 +353,14 @@ static int luaP_cursorfetch (lua_State *L) {
 }
 
 static int luaP_cursormove (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   SPI_cursor_move(c->cursor, 1, luaL_optlong(L, 2, 0));
   return 0;
 }
 
 #if PG_VERSION_NUM >= 80300
 static int luaP_cursorposfetch (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
   SPI_scroll_cursor_fetch(c->cursor, fd, luaL_optlong(L, 2, FETCH_ALL));
   if (SPI_processed > 0) /* any rows? */
@@ -343,7 +371,7 @@ static int luaP_cursorposfetch (lua_State *L) {
 }
 
 static int luaP_cursorposmove (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
   SPI_scroll_cursor_move(c->cursor, fd, luaL_optlong(L, 2, 0));
   return 0;
@@ -352,7 +380,7 @@ static int luaP_cursorposmove (lua_State *L) {
 
 
 static int luaP_cursorclose (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) luaL_checkudata(L, 1, PLLUA_CURSORMT);
+  luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   SPI_cursor_close(c->cursor);
   return 0;
 }
@@ -372,7 +400,7 @@ static int luaP_plantostring (lua_State *L) {
 }
 
 static int luaP_executeplan (lua_State *L) {
-  luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
+  luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   bool ro = (bool) lua_toboolean(L, 3);
   long c = luaL_optlong(L, 4, 0);
   int result;
@@ -395,7 +423,7 @@ static int luaP_executeplan (lua_State *L) {
 }
 
 static int luaP_saveplan (lua_State *L) {
-  luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
+  luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   p->plan = SPI_saveplan(p->plan);
   switch (SPI_result) {
     case SPI_ERROR_ARGUMENT:
@@ -408,13 +436,13 @@ static int luaP_saveplan (lua_State *L) {
 }
 
 static int luaP_issavedplan (lua_State *L) {
-  luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
+  luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   lua_pushboolean(L, p->issaved);
   return 1;
 }
 
 static int luaP_getcursorplan (lua_State *L) {
-  luaP_Plan *p = (luaP_Plan *) luaL_checkudata(L, 1, PLLUA_PLANMT);
+  luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   bool ro = (bool) lua_toboolean(L, 3);
   const char *name = lua_tostring(L, 4);
   Portal cursor;
@@ -439,7 +467,7 @@ static int luaP_getcursorplan (lua_State *L) {
 
 /* ======= SPI ======= */
 
-static Oid luaP_gettypeoid (const char *typename) {
+Oid luaP_gettypeoid (const char *typename) {
 #if PG_VERSION_NUM < 80300
   List *namelist = stringToQualifiedNameList(typename, NULL);
   HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist));
@@ -484,7 +512,7 @@ static int luaP_prepare (lua_State *L) {
   p->plan = SPI_prepare_cursor(q, nargs, p->type, cursoropt);
   if (SPI_result < 0)
     return luaL_error(L, "SPI_prepare error: %d", SPI_result);
-  luaL_getmetatable(L, PLLUA_PLANMT);
+  luaP_getfield(L, PLLUA_PLANMT);
   lua_setmetatable(L, -2);
   return 1;
 }
@@ -567,22 +595,22 @@ static const luaL_reg luaP_Plan_mt[] = {
 
 void luaP_registerspi (lua_State *L) {
   /* tuple */
-  luaL_newmetatable(L, PLLUA_TUPLEMT);
+  luaP_newmetatable(L, PLLUA_TUPLEMT);
   luaL_register(L, NULL, luaP_Tuple_mt);
   lua_pop(L, 1);
   /* tuptable */
-  luaL_newmetatable(L, PLLUA_TUPTABLEMT);
+  luaP_newmetatable(L, PLLUA_TUPTABLEMT);
   luaL_register(L, NULL, luaP_Tuptable_mt);
   lua_pop(L, 1);
   /* cursor */
-  luaL_newmetatable(L, PLLUA_CURSORMT);
+  luaP_newmetatable(L, PLLUA_CURSORMT);
   lua_newtable(L);
   luaL_register(L, NULL, luaP_Cursor_funcs);
   lua_setfield(L, -2, "__index");
   luaL_register(L, NULL, luaP_Cursor_mt);
   lua_pop(L, 1);
   /* plan */
-  luaL_newmetatable(L, PLLUA_PLANMT);
+  luaP_newmetatable(L, PLLUA_PLANMT);
   lua_newtable(L);
   luaL_register(L, NULL, luaP_Plan_funcs);
   lua_setfield(L, -2, "__index");

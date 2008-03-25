@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler, trusted
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.13 2008/02/08 03:06:42 carvalho Exp $
+ * $Id: pllua.c,v 1.14 2008/03/25 17:22:24 carvalho Exp $
  */
 
 #include "pllua.h"

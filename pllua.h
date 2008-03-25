@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.2
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.12 2008/02/24 15:41:02 carvalho Exp $
+ * $Id: pllua.h,v 1.13 2008/03/25 17:22:24 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -27,6 +27,15 @@
 #include <lualib.h>
 #include <lauxlib.h>
 
+typedef struct luaP_Buffer {
+  int size;
+  Datum *value;
+  char *null;
+} luaP_Buffer;
+
+/* utils */
+void *luaP_toudata (lua_State *L, int ud, const char *tname);
+luaP_Buffer *luaP_getbuffer (lua_State *L, int n);
 /* call handler API */
 lua_State *luaP_newstate (int trusted, MemoryContext memctxt);
 Datum luaP_validator (lua_State *L, Oid oid);
@@ -38,6 +47,7 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);
 HeapTuple luaP_totuple (lua_State *L);
 /* SPI */
+Oid luaP_gettypeoid (const char *typename);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 void luaP_pushcursor (lua_State *L, Portal cursor);

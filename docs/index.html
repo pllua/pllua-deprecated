@@ -4,7 +4,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 
 <!-- PL/Lua home -->
-<!-- $Id: index.html,v 1.1 2008/01/09 17:56:19 carvalho Exp $ -->
+<!-- $Id: index.html,v 1.2 2008/03/25 17:22:24 carvalho Exp $ -->
 
 <head>
 	<title>PL/Lua documentation</title>
@@ -29,6 +29,7 @@
 <div id="horizbar">
 	<a href="#introduction" accesskey="1">Introduction</a>&nbsp; :: &nbsp;
 	<a href="#languages">Languages</a>&nbsp; :: &nbsp; 
+	<a href="#types">Types</a>&nbsp; :: &nbsp; 
 	<a href="#functions">Functions</a>&nbsp; :: &nbsp; 
 	<a href="#database">Database Access</a>&nbsp; :: &nbsp; 
 	<a href="#triggers">Triggers</a>&nbsp; :: &nbsp; 
@@ -157,8 +158,54 @@ signature but emit <code>msg</code> at their respective log levels.</p>
 <code>shared[varname] = value</code>.</p>
 
 
+<h2 id="types">Types</h2>
+<small>Data values in PL/Lua</small>
+<p>PL/Lua makes no conversion of function arguments to string/text form
+between Lua and PostgreSQL. Basic data types are natively supported, that is,
+converted directly, by value, to a Lua equivalent. The following table shows
+type equivalences:</p>
+
+<table><tbody>
+    <tr>
+      <td><strong>PostgreSQL type</strong></td>
+      <td><strong>Lua type</strong></td>
+    </tr>
+    <tr>
+      <td><code>bool</code></td>
+      <td><code>boolean</code></td>
+    </tr>
+    <tr>
+      <td><code>float4, float8, int2, int4</code></td>
+      <td><code>number</code></td>
+    </tr>
+    <tr>
+      <td><code>text, char, varchar</code></td>
+      <td><code>string</code></td>
+    </tr>
+    <tr>
+      <td>Base, domain</td>
+      <td><code>userdata</code></td>
+    </tr>
+    <tr>
+      <td>Arrays, composite</td>
+      <td><code>table</code></td>
+    </tr>
+</tbody></table>
+
+<p>Base and domain types other than the ones in the first three rows in the
+table are converted to a <em>raw datum</em> userdata in Lua with a suitable
+<code>__tostring</code> metamethod based on the type's output function.
+Conversely, <code>fromstring</code> takes a type name and a string and returns
+a raw datum from the provided type's input function. Arrays are converted to
+Lua tables with integer indices, while composite types become tables with keys
+corresponding to attribute names.</p>
+
+<h4 id="fromstring"><code>fromstring(tname, s)</code></h4>
+<p>Returns a raw datum userdata for <code>s</code> of type <code>tname</code>
+using <code>tname</code>'s input function to convert <code>s</code>.</p>
+
 <h2 id="functions">Functions</h2>
-<small>Functions and data values in PL/Lua</small>
+<small>Functions in PL/Lua</small>
 <p>PL/Lua functions are created according to the following prototype:</p>
 
 <pre>
@@ -167,10 +214,8 @@ CREATE FUNCTION <strong>func</strong>(<em>args</em>) RETURNS <em>rettype</em> AS
 $$ LANGUAGE [pllua | plluau];
 </pre>
 
-<p>where <code>args</code> are usually <em>named</em> arguments. There is no
-conversion of arguments to string/text form between Lua and PostgreSQL. Basic
-data types -- like integer, double, text -- and their arrays are supported.
-The value returned by <code>func</code> is converted to a datum of type
+<p>where <code>args</code> are usually <em>named</em> arguments. The value
+returned by <code>func</code> is converted to a datum of type
 <code>rettype</code> unless <code>rettype</code> is <code>void</code>.</p>
 
 <p>The function body is composed as below to become a typical Lua chunk:</p>
@@ -219,8 +264,8 @@ $$ LANGUAGE pllua;
 <p>Moreover, as can be seen in the composition of <code>func</code> above,
 PL/Lua functions are actually <em>closures</em> on
 <code><em>upvalue</em></code>. The user can think of <code>upvalue</code> as
-local cache to <code>func</code> that could -- and should! -- be used instead
-of the global state to store values. Quick example:</p> 
+local cache to <code>func</code> that could &mdash; and should! &mdash; be
+used instead of the global state to store values. Quick example:</p> 
 
 <pre>
 CREATE FUNCTION counter() RETURNS int AS $$
@@ -243,8 +288,8 @@ always appends an <code>end</code>. It is important to observe that what
 actually gets defined as <code>counter</code> is a wrapper around a
 coroutine.</p>
 
-<p>Arrays are converted to Lua tables with integer indices, while composite
-types become tables with keys corresponding to attribute names:</p>
+<p>From <a href="#types">Types</a> we know that composite types can be
+accessed as tables with keys corresponding to attribute names:</p>
 
 <pre>
 CREATE TYPE greeting AS (how text, who text);
@@ -330,6 +375,57 @@ CREATE FUNCTION setcounter(c integer) RETURNS void AS $$
 $$ LANGUAGE pllua;
 </pre>
 
+<h3>Examples</h3>
+<p>Let's revisit our (rather inefficient) recursive Fibonacci function
+<code>fib</code>. A better version uses <em>tail recursion</em>:</p>
+
+<pre>
+CREATE FUNCTION fibt(n integer) RETURNS integer AS $$
+  return upvalue(n, 0, 1)
+end
+upvalue = function(n, a, b) -- tail recursive
+  if n < 1 then
+    return b
+  else
+    return upvalue(n - 1, b, a + b)
+  end
+$$ LANGUAGE pllua;
+</pre>
+
+<p>We can also use <code>upvalue</code> as a cache to store previous elements
+in the sequence and obtain a <em>memoized</em> version:</p>
+
+<pre>
+CREATE FUNCTION fibm(n integer) RETURNS integer AS $$
+  if n < 3 then
+    return n
+  else
+    local v = upvalue[n]
+    if not v then
+      v = fibm(n - 1) + fibm(n - 2)
+      upvalue[n] = v
+    end
+    return v
+  end
+end
+do upvalue = {} -- memoize
+$$ LANGUAGE pllua;
+</pre>
+
+<p>Finally, we can implement an iterator similar to <code>counter</code>:</p>
+
+<pre>
+CREATE FUNCTION fibi() RETURNS integer AS $$
+  while true do
+    upvalue.curr, upvalue.next = upvalue.next, upvalue.curr + upvalue.next
+    coroutine.yield(upvalue.curr)
+  end
+end
+do
+  upvalue = {curr = 0, next = 1}
+  fibi = coroutine.wrap(fibi)
+$$ LANGUAGE pllua;
+</pre>
 
 <h2 id="database">Database Access</h2>
 <small>Server interface in PL/Lua</small>
@@ -428,11 +524,38 @@ backward.</p>
 <p>Closes a cursor.</p>
 
 
-<h3>Example</h3>
-<p>To illustrate the SPI in PL/Lua, let's store a binary tree:</p>
+<h3>Examples</h3>
+<p>Let's start with a simple example using cursors:</p>
 
 <pre>
-CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
+CREATE TABLE sometable ( sid int, sname text, sdata text);
+
+CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
+  if upvalue == nil then -- plan not cached?
+    local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname = $1"
+    upvalue = server.prepare(cmd, {"text"}):save()
+  end
+  local c = upvalue:getcursor({i_name}, true) -- read-only
+  while true do
+    local r = c:fetch(1)
+    if r == nil then break end
+    r = r[1]
+    coroutine.yield{sid=r.sid, sname=r.sname, sdata=r.sdata}
+  end
+  c:close()
+$$ LANGUAGE pllua;
+</pre>
+
+<p>This SRF works as a pipeline: it uses <code>upvalue</code> to store a saved
+plan, while local variable <code>c</code> is a cursor that we use to fetch, at
+each loop iteration, a row from <code>upvalue</code> and then yield a new row.
+Note that local <code>r</code> is a tupletable and we need to access
+<code>r[1]</code>.</p>
+
+<p>Now, for a more elaborate example, let's store a binary tree:</p>
+
+<pre>
+CREATE TABLE tree (id int PRIMARY KEY, lchild int, rchild int);
 </pre>
 
 <p>which we can fill using:</p>
@@ -688,7 +811,7 @@ SOFTWARE.</p>
 &nbsp; :: &nbsp;
 <a href="http://jigsaw.w3.org/css-validator/check/referer">Valid CSS</a>
 <br />
-Last modified: $Date: 2008/01/09 17:56:19 $, $Author: carvalho $.
+Last modified: $Date: 2008/03/25 17:22:24 $, $Author: carvalho $.
 </p>
 </div>
 
