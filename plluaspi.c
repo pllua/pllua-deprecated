@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.16 2008/03/25 17:22:24 carvalho Exp $
+ * $Id: plluaspi.c,v 1.17 2008/03/29 02:49:55 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -537,6 +537,44 @@ static int luaP_find (lua_State *L) {
   return 1;
 }
 
+static int luaP_rowsaux (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, lua_upvalueindex(1));
+  int init = lua_toboolean(L, lua_upvalueindex(2));
+  SPI_cursor_fetch(c->cursor, 1, 1);
+  if (SPI_processed > 0) { /* any row? */
+    if (!init) { /* register tupdesc */
+      lua_pushinteger(L, (int) InvalidOid);
+      luaP_pushdesctable(L, SPI_tuptable->tupdesc);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+      lua_pushboolean(L, 1);
+      lua_replace(L, lua_upvalueindex(2));
+    }
+    luaP_pushtuple(L, SPI_tuptable->tupdesc, SPI_tuptable->vals[0],
+        InvalidOid, 1);
+  }
+  else {
+    SPI_cursor_close(c->cursor);
+    lua_pushnil(L);
+  }
+  return 1;
+}
+
+static int luaP_rows (lua_State *L) {
+  Portal c;
+  SPI_plan *p = SPI_prepare_cursor(luaL_checkstring(L, 1), 0, NULL, 0);
+  if (SPI_result < 0)
+    return luaL_error(L, "SPI_prepare error: %d", SPI_result);
+  if (!SPI_is_cursor_plan(p))
+    return luaL_error(L, "Statement is not iterable");
+  c = SPI_cursor_open(NULL, p, NULL, NULL, 1);
+  if (c == NULL)
+    return luaL_error(L, "error opening cursor");
+  luaP_pushcursor(L, c);
+  lua_pushboolean(L, 0); /* not inited */
+  lua_pushcclosure(L, luaP_rowsaux, 2);
+  return 1;
+}
+
 
 /* ======= luaP_registerspi ======= */
 
@@ -563,6 +601,7 @@ static const luaL_reg luaP_SPI_funcs[] = {
   {"prepare", luaP_prepare},
   {"execute", luaP_execute},
   {"find", luaP_find},
+  {"rows", luaP_rows},
   {NULL, NULL}
 };
 

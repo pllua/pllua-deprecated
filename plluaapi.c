@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.15 2008/03/25 17:22:24 carvalho Exp $
+ * $Id: plluaapi.c,v 1.16 2008/03/29 02:49:55 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -27,15 +27,15 @@ typedef struct luaP_Typeinfo {
   char align;
   bool byval;
   Oid elem;
-  FmgrInfo *input;
-  FmgrInfo *output;
+  FmgrInfo input;
+  FmgrInfo output;
   TupleDesc tupdesc;
-  int ismodule;
 } luaP_Typeinfo;
 
 /* raw datum */
 typedef struct luaP_Datum {
-  Pointer dp; /* datum pointer */
+  int issaved;
+  Datum datum;
   luaP_Typeinfo *ti;
 } luaP_Datum;
 
@@ -101,13 +101,21 @@ static Datum datumcopy (Datum dat, luaP_Typeinfo *ti) {
   return dat;
 }
 
+/* get MemoryContext for state L */
+static MemoryContext luaP_getmemctxt (lua_State *L) {
+  MemoryContext mcxt;
+  lua_pushlightuserdata(L, (void *) L);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  mcxt = (MemoryContext) lua_touserdata(L, -1);
+  lua_pop(L, 1);
+  return mcxt;
+}
+
 
 /* ======= Type ======= */
 
 static int luaP_typeinfogc (lua_State *L) {
   luaP_Typeinfo *ti = lua_touserdata(L, 1);
-  pfree(ti->input);
-  pfree(ti->output);
   if (ti->tupdesc) FreeTupleDesc(ti->tupdesc);
   return 0;
 }
@@ -119,26 +127,25 @@ static luaP_Typeinfo *luaP_gettypeinfo (lua_State *L, int oid) {
   if (lua_isnil(L, -1)) { /* not cached? */
     HeapTuple type;
     Form_pg_type typeinfo;
+    MemoryContext mcxt = luaP_getmemctxt(L);
     /* query system */
     type = SearchSysCache(TYPEOID, ObjectIdGetDatum(oid), 0, 0, 0);
     if (!HeapTupleIsValid(type))
       elog(ERROR, "[pllua]: cache lookup failed for type %u", oid);
     typeinfo = (Form_pg_type) GETSTRUCT(type);
     /* cache */
-    ti = lua_newuserdata(L, sizeof(luaP_Typeinfo) + 2 * sizeof(FmgrInfo));
+    ti = lua_newuserdata(L, sizeof(luaP_Typeinfo));
     ti->len = typeinfo->typlen;
     ti->type = typeinfo->typtype;
     ti->align = typeinfo->typalign;
     ti->byval = typeinfo->typbyval;
     ti->elem = typeinfo->typelem;
-    ti->input = (FmgrInfo *) (ti + 1);
-    ti->output = ti->input + 1;
-    fmgr_info_cxt(typeinfo->typinput, ti->input, TopMemoryContext);
-    fmgr_info_cxt(typeinfo->typoutput, ti->output, TopMemoryContext);
+    fmgr_info_cxt(typeinfo->typinput, &ti->input, mcxt);
+    fmgr_info_cxt(typeinfo->typoutput, &ti->output, mcxt);
     ti->tupdesc = NULL;
     if (ti->type == 'c') { /* complex? */
       TupleDesc td = lookup_rowtype_tupdesc(oid, typeinfo->typtypmod);
-      MemoryContext m = MemoryContextSwitchTo(TopMemoryContext);
+      MemoryContext m = MemoryContextSwitchTo(mcxt);
       ti->tupdesc = CreateTupleDescCopyConstr(td);
       MemoryContextSwitchTo(m);
       BlessTupleDesc(ti->tupdesc);
@@ -164,15 +171,39 @@ static luaP_Typeinfo *luaP_gettypeinfo (lua_State *L, int oid) {
 
 static int luaP_datumtostring (lua_State *L) {
   luaP_Datum *d = lua_touserdata(L, 1);
-  lua_pushstring(L, OutputFunctionCall(d->ti->output,
-        PointerGetDatum(d->dp)));
+  lua_pushstring(L, OutputFunctionCall(&d->ti->output, d->datum));
+  return 1;
+}
+
+static int luaP_datumgc (lua_State *L) {
+  luaP_Datum *d = lua_touserdata(L, 1);
+  if (d->issaved) pfree(DatumGetPointer(d->datum));
+  return 0;
+}
+
+static int luaP_datumsave (lua_State *L) {
+  luaP_Datum *d = luaP_toudata(L, 1, PLLUA_DATUM);
+  if (d == NULL) luaL_typerror(L, 1, PLLUA_DATUM);
+  if (!d->ti->byval) { /* by reference? */
+    Size l = datumGetSize(d->datum, false, d->ti->len);
+    MemoryContext mcxt = luaP_getmemctxt(L);
+    MemoryContext m = MemoryContextSwitchTo(mcxt);
+    Pointer copy = palloc(l);
+    Pointer dp = DatumGetPointer(d->datum);
+    memcpy(copy, dp, l);
+    MemoryContextSwitchTo(m);
+    pfree(dp);
+    d->issaved = 1;
+    d->datum = PointerGetDatum(copy);
+  }
   return 1;
 }
 
 static luaP_Datum *luaP_pushrawdatum (lua_State *L, Datum dat,
     luaP_Typeinfo *ti) {
   luaP_Datum *d = lua_newuserdata(L, sizeof(luaP_Datum));
-  d->dp = DatumGetPointer(dat);
+  d->issaved = 0;
+  d->datum = dat;
   d->ti = ti;
   lua_pushlightuserdata(L, (void *) PLLUA_DATUM);
   lua_rawget(L, LUA_REGISTRYINDEX); /* Datum_MT */
@@ -385,7 +416,7 @@ static int luaP_fromstring (lua_State *L) {
   Datum v;
   /* from getTypeIOParam in lsyscache.c */
   if (ti->type == 'b' && OidIsValid(ti->elem)) inoid = ti->elem;
-  v = InputFunctionCall(ti->input, (char *) s, inoid, 0); /* typmod = 0 */
+  v = InputFunctionCall(&ti->input, (char *) s, inoid, 0); /* typmod = 0 */
   luaP_pushdatum(L, v, oid);
   return 1;
 }
@@ -401,28 +432,21 @@ static const luaL_Reg luaP_funcs[] = {
   {NULL, NULL}
 };
 
-static void *luaP_alloc (void *ud, void *ptr, size_t osize, size_t nsize) {
-  (void) osize; /* not used */
-  if (nsize == 0) {
-    if (ptr != NULL) pfree(ptr);
-    return NULL;
-  }
-  else {
-    if (ptr != NULL)
-      return repalloc(ptr, nsize);
-    else {
-      void *a;
-      MemoryContext m = MemoryContextSwitchTo((MemoryContext) ud);
-      a = palloc(nsize);
-      MemoryContextSwitchTo(m);
-      return a;
-    }
-  }
+void luaP_close (lua_State *L) {
+  MemoryContext mcxt = luaP_getmemctxt(L);
+  MemoryContextDelete(mcxt);
+  lua_close(L);
 }
 
-lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
+lua_State *luaP_newstate (int trusted) {
   int status;
-  lua_State *L = lua_newstate(luaP_alloc, (void *) memctxt);
+  MemoryContext mcxt = AllocSetContextCreate(TopMemoryContext,
+      "PL/Lua context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
+      ALLOCSET_DEFAULT_MAXSIZE);
+  lua_State *L = luaL_newstate();
+  lua_pushlightuserdata(L, (void *) L);
+  lua_pushlightuserdata(L, (void *) mcxt);
+  lua_rawset(L, LUA_REGISTRYINDEX);
   /* core libs */
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
@@ -464,6 +488,12 @@ lua_State *luaP_newstate (int trusted, MemoryContext memctxt) {
   lua_newtable(L); /* luaP_Datum MT */
   lua_pushcfunction(L, luaP_datumtostring);
   lua_setfield(L, -2, "__tostring");
+  lua_pushcfunction(L, luaP_datumgc);
+  lua_setfield(L, -2, "__gc");
+  lua_createtable(L, 0, 1);
+  lua_pushcfunction(L, luaP_datumsave);
+  lua_setfield(L, -2, "save");
+  lua_setfield(L, -2, "__index");
   lua_rawset(L, LUA_REGISTRYINDEX);
   /* load pllua.init modules */
   status = luaP_modinit(L);
@@ -1038,7 +1068,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
               if (d == NULL) elog(ERROR,
                   "[pllua]: raw datum expected for datum conversion, got %s",
                   lua_typename(L, lua_type(L, -1)));
-              dat = datumcopy(PointerGetDatum(d->dp), ti);
+              dat = datumcopy(d->datum, ti);
             }
             break;
 #if PG_VERSION_NUM >= 80300

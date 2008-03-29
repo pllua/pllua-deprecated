@@ -2,7 +2,7 @@
  * pllua.c: PL/Lua call handler, trusted
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: pllua.c,v 1.14 2008/03/25 17:22:24 carvalho Exp $
+ * $Id: pllua.c,v 1.15 2008/03/29 02:49:55 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -20,15 +20,15 @@ Datum plluau_call_handler(PG_FUNCTION_ARGS);
 
 PG_FUNCTION_INFO_V1(_PG_init);
 Datum _PG_init(PG_FUNCTION_ARGS) {
-  L[0] = luaP_newstate(0, TopMemoryContext); /* untrusted */
-  L[1] = luaP_newstate(1, TopMemoryContext); /* trusted */
+  L[0] = luaP_newstate(0); /* untrusted */
+  L[1] = luaP_newstate(1); /* trusted */
   PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(_PG_fini);
 Datum _PG_fini(PG_FUNCTION_ARGS) {
-  lua_close(L[0]);
-  lua_close(L[1]);
+  luaP_close(L[0]);
+  luaP_close(L[1]);
   PG_RETURN_VOID();
 }
 

@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.2
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.13 2008/03/25 17:22:24 carvalho Exp $
+ * $Id: pllua.h,v 1.14 2008/03/29 02:49:55 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -37,7 +37,8 @@ typedef struct luaP_Buffer {
 void *luaP_toudata (lua_State *L, int ud, const char *tname);
 luaP_Buffer *luaP_getbuffer (lua_State *L, int n);
 /* call handler API */
-lua_State *luaP_newstate (int trusted, MemoryContext memctxt);
+lua_State *luaP_newstate (int trusted);
+void luaP_close (lua_State *L);
 Datum luaP_validator (lua_State *L, Oid oid);
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo);
 /* general API */
