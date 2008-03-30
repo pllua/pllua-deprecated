@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.17 2008/03/29 02:49:55 carvalho Exp $
+ * $Id: plluaspi.c,v 1.18 2008/03/30 02:49:45 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -24,7 +24,6 @@ typedef struct luaP_Tuple {
   int changed;
   Oid relid;
   HeapTuple tuple;
-  HeapTuple newtuple;
   TupleDesc desc;
   Datum *value;
   bool *null;
@@ -89,6 +88,28 @@ void luaP_pushdesctable (lua_State *L, TupleDesc desc) {
     lua_pushinteger(L, i);
     lua_rawset(L, -3); /* t[att] = i */
   }
+}
+
+static int luaP_rowsaux (lua_State *L) {
+  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, lua_upvalueindex(1));
+  int init = lua_toboolean(L, lua_upvalueindex(2));
+  SPI_cursor_fetch(c->cursor, 1, 1);
+  if (SPI_processed > 0) { /* any row? */
+    if (!init) { /* register tupdesc */
+      lua_pushinteger(L, (int) InvalidOid);
+      luaP_pushdesctable(L, SPI_tuptable->tupdesc);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+      lua_pushboolean(L, 1);
+      lua_replace(L, lua_upvalueindex(2));
+    }
+    luaP_pushtuple(L, SPI_tuptable->tupdesc, SPI_tuptable->vals[0],
+        InvalidOid, 1);
+  }
+  else {
+    SPI_cursor_close(c->cursor);
+    lua_pushnil(L);
+  }
+  return 1;
 }
 
 /* ======= Buffer ======= */
@@ -183,13 +204,6 @@ static int luaP_tuplenewindex (lua_State *L) {
   return 0;
 }
 
-static int luaP_tuplegc (lua_State *L) {
-  luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
-  if (t->newtuple) /* allocated in upper context? */
-    heap_freetuple(t->newtuple);
-  return 0;
-}
-
 static int luaP_tupletostring (lua_State *L) {
   lua_pushfstring(L, "%s: %p", PLLUA_TUPLEMT, lua_touserdata(L, 1));
   return 1;
@@ -221,7 +235,6 @@ void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
   t->desc = desc;
   t->relid = relid;
   t->tuple = tuple;
-  t->newtuple = NULL;
   luaP_getfield(L, PLLUA_TUPLEMT);
   lua_setmetatable(L, -2);
 }
@@ -235,25 +248,55 @@ static HeapTuple luaP_copytuple (luaP_Tuple *t) {
   tuple->t_tableOid = t->tuple->t_tableOid;
   if (t->desc->tdhasoid)
     HeapTupleSetOid(tuple, HeapTupleGetOid(t->tuple));
-  t->newtuple = SPI_copytuple(tuple); /* in upper mem context */
-  return tuple;
+  return SPI_copytuple(tuple); /* in upper mem context */
+}
+
+static luaP_Tuple *luaP_checktuple (lua_State *L, int pos) {
+  luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, pos);
+  if (t != NULL) {
+    if (lua_getmetatable(L, pos)) {
+      luaP_getfield(L, PLLUA_TUPLEMT);
+      if (!lua_rawequal(L, -1, -2)) /* not tuple? */
+        t = NULL;
+      lua_pop(L, 2); /* metatables */
+    }
+  }
+  return t;
 }
 
 /* tuple on top of stack */
 HeapTuple luaP_totuple (lua_State *L) {
-  HeapTuple tuple = NULL;
-  luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, -1);
-  if (t != NULL) {
-    if (lua_getmetatable(L, -1)) {
-      luaP_getfield(L, PLLUA_TUPLEMT);
-      if (lua_rawequal(L, -1, -2)) /* tuple? */
-        tuple = (t->changed == 1) ? luaP_copytuple(t) : t->tuple;
-      lua_pop(L, 2); /* metatables */
-    }
-  }
-  return tuple;
+  luaP_Tuple *t = luaP_checktuple(L, -1);
+  return (t->changed == 1) ? luaP_copytuple(t) : t->tuple;
 }
 
+/* tuple on top of stack */
+HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc) {
+  luaP_Tuple *t = luaP_checktuple(L, -1);
+  int i;
+  luaP_Buffer *b;
+  if (t == NULL) return NULL; /* not a tuple */
+  lua_pushinteger(L, (int) t->relid);
+  lua_rawget(L, LUA_REGISTRYINDEX); /* tuple desc table */
+  b = luaP_getbuffer(L, tupdesc->natts);
+  for (i = 0; i < tupdesc->natts; i++) {
+    int j;
+    lua_getfield(L, -1, NameStr(tupdesc->attrs[i]->attname));
+    j = luaL_optinteger(L, -1, -1);
+    if (j >= 0) {
+      if (t->changed == -1) /* read-only? */
+        b->value[i] = heap_getattr(t->tuple,
+            t->desc->attrs[j]->attnum, t->desc, b->null + i);
+      else {
+        b->value[i] = t->value[j];
+        b->null[i] = t->null[j];
+      }
+    }
+    lua_pop(L, 1);
+  }
+  lua_pop(L, 1); /* desc table */
+  return heap_form_tuple(tupdesc, b->value, b->null);
+}
 
 /* ======= TupleTable ======= */
 
@@ -464,6 +507,28 @@ static int luaP_getcursorplan (lua_State *L) {
   return 1;
 }
 
+static int luaP_rowsplan (lua_State *L) {
+  luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
+  Portal cursor;
+  if (!SPI_is_cursor_plan(p->plan))
+    return luaL_error(L, "Plan is not iterable");
+  if (p->nargs > 0) {
+    luaP_Buffer *b;
+    if (lua_type(L, 2) != LUA_TTABLE) luaL_typerror(L, 2, "table");
+    b = luaP_getbuffer(L, p->nargs);
+    luaP_fillbuffer(L, 2, p->type, b);
+    cursor = SPI_cursor_open(NULL, p->plan, b->value, b->null, 1);
+  }
+  else
+    cursor = SPI_cursor_open(NULL, p->plan, NULL, NULL, 1);
+  if (cursor == NULL)
+    return luaL_error(L, "error opening cursor");
+  luaP_pushcursor(L, cursor);
+  lua_pushboolean(L, 0); /* not inited */
+  lua_pushcclosure(L, luaP_rowsaux, 2);
+  return 1;
+}
+
 
 /* ======= SPI ======= */
 
@@ -537,39 +602,17 @@ static int luaP_find (lua_State *L) {
   return 1;
 }
 
-static int luaP_rowsaux (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, lua_upvalueindex(1));
-  int init = lua_toboolean(L, lua_upvalueindex(2));
-  SPI_cursor_fetch(c->cursor, 1, 1);
-  if (SPI_processed > 0) { /* any row? */
-    if (!init) { /* register tupdesc */
-      lua_pushinteger(L, (int) InvalidOid);
-      luaP_pushdesctable(L, SPI_tuptable->tupdesc);
-      lua_rawset(L, LUA_REGISTRYINDEX);
-      lua_pushboolean(L, 1);
-      lua_replace(L, lua_upvalueindex(2));
-    }
-    luaP_pushtuple(L, SPI_tuptable->tupdesc, SPI_tuptable->vals[0],
-        InvalidOid, 1);
-  }
-  else {
-    SPI_cursor_close(c->cursor);
-    lua_pushnil(L);
-  }
-  return 1;
-}
-
 static int luaP_rows (lua_State *L) {
-  Portal c;
+  Portal cursor;
   SPI_plan *p = SPI_prepare_cursor(luaL_checkstring(L, 1), 0, NULL, 0);
   if (SPI_result < 0)
     return luaL_error(L, "SPI_prepare error: %d", SPI_result);
   if (!SPI_is_cursor_plan(p))
     return luaL_error(L, "Statement is not iterable");
-  c = SPI_cursor_open(NULL, p, NULL, NULL, 1);
-  if (c == NULL)
+  cursor = SPI_cursor_open(NULL, p, NULL, NULL, 1);
+  if (cursor == NULL)
     return luaL_error(L, "error opening cursor");
-  luaP_pushcursor(L, c);
+  luaP_pushcursor(L, cursor);
   lua_pushboolean(L, 0); /* not inited */
   lua_pushcclosure(L, luaP_rowsaux, 2);
   return 1;
@@ -583,6 +626,7 @@ static const luaL_reg luaP_Plan_funcs[] = {
   {"save", luaP_saveplan},
   {"issaved", luaP_issavedplan},
   {"getcursor", luaP_getcursorplan},
+  {"rows", luaP_rowsplan},
   {NULL, NULL}
 };
 
@@ -608,7 +652,6 @@ static const luaL_reg luaP_SPI_funcs[] = {
 static const luaL_reg luaP_Tuple_mt[] = {
   {"__index", luaP_tupleindex},
   {"__newindex", luaP_tuplenewindex},
-  {"__gc", luaP_tuplegc},
   {"__tostring", luaP_tupletostring},
   {NULL, NULL}
 };

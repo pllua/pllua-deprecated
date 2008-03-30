@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.2
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.14 2008/03/29 02:49:55 carvalho Exp $
+ * $Id: pllua.h,v 1.15 2008/03/30 02:49:45 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -47,6 +47,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
 void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);
 HeapTuple luaP_totuple (lua_State *L);
+HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc);
 /* SPI */
 Oid luaP_gettypeoid (const char *typename);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);

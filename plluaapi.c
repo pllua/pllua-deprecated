@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.16 2008/03/29 02:49:55 carvalho Exp $
+ * $Id: plluaapi.c,v 1.17 2008/03/30 02:49:45 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -985,26 +985,35 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
       default: {
         luaP_Typeinfo *ti = luaP_gettypeinfo(L, type);
         switch (ti->type) {
-          case 'c': { /* complex? */
-            int i;
-            luaP_Buffer *b;
-            if (lua_type(L, -1) != LUA_TTABLE)
-              elog(ERROR, "[pllua]: table expected for record result, got %s",
-                  lua_typename(L, lua_type(L, -1)));
-            /* create tuple */
-            b = luaP_getbuffer(L, ti->tupdesc->natts);
-            for (i = 0; i < ti->tupdesc->natts; i++) {
-              lua_getfield(L, -1, NameStr(ti->tupdesc->attrs[i]->attname));
-              /* only simple types allowed in record */
-              b->value[i] = luaP_todatum(L, ti->tupdesc->attrs[i]->atttypid,
-                  ti->tupdesc->attrs[i]->atttypmod, b->null + i);
-              lua_pop(L, 1);
+          case 'c': /* complex? */
+            if (lua_type(L, -1) == LUA_TTABLE) {
+              int i;
+              luaP_Buffer *b;
+              if (lua_type(L, -1) != LUA_TTABLE)
+                elog(ERROR, "[pllua]: table expected for record result, got %s",
+                    lua_typename(L, lua_type(L, -1)));
+              /* create tuple */
+              b = luaP_getbuffer(L, ti->tupdesc->natts);
+              for (i = 0; i < ti->tupdesc->natts; i++) {
+                lua_getfield(L, -1, NameStr(ti->tupdesc->attrs[i]->attname));
+                /* only simple types allowed in record */
+                b->value[i] = luaP_todatum(L, ti->tupdesc->attrs[i]->atttypid,
+                    ti->tupdesc->attrs[i]->atttypmod, b->null + i);
+                lua_pop(L, 1);
+              }
+              /* make copy in upper executor memory context */
+              dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(ti->tupdesc,
+                      b->value, b->null), ti->tupdesc));
             }
-            /* make copy in upper executor memory context */
-            dat = PointerGetDatum(SPI_returntuple(heap_form_tuple(ti->tupdesc,
-                    b->value, b->null), ti->tupdesc));
+            else { /* tuple */
+              HeapTuple tuple = luaP_casttuple(L, ti->tupdesc);
+              if (tuple == NULL)
+                elog(ERROR,
+                    "[pllua]: table or tuple expected for record result, got %s",
+                    lua_typename(L, lua_type(L, -1)));
+              dat = PointerGetDatum(SPI_returntuple(tuple, ti->tupdesc));
+            }
             break;
-          }
           case 'b': /* base? */
           case 'd': /* domain? */
             if (ti->elem != 0 && ti->len == -1) { /* array? */
