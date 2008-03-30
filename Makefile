@@ -1,15 +1,15 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.9 2008/02/24 15:41:02 carvalho Exp $
+# $Id: Makefile,v 1.10 2008/03/30 03:49:04 carvalho Exp $
 
 # Lua specific
 
 # General
-#LUAINC =
-#LUALIB = -llua
+LUAINC =
+LUALIB = -llua
 
 # Debian/Ubuntu
-LUAINC = -I/usr/include/lua5.1
-LUALIB = -llua5.1
+#LUAINC = -I/usr/include/lua5.1
+#LUALIB = -llua5.1
 
 # Fink
 #LUAINC = -I/sw/include -I/sw/include/postgresql
