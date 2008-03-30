@@ -4,7 +4,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 
 <!-- PL/Lua home -->
-<!-- $Id: index.html,v 1.2 2008/03/25 17:22:24 carvalho Exp $ -->
+<!-- $Id: index.html,v 1.3 2008/03/30 03:22:12 carvalho Exp $ -->
 
 <head>
 	<title>PL/Lua documentation</title>
@@ -441,7 +441,8 @@ a <a href="#plans">plan</a>.</p>
 
 <p>A <em>tuple</em> represents a composite type, record, or row. It can be
 accessed similarly to a Lua table, by simply indexing fields in the composite
-type as keys. Tuple sets, like the ones returned by
+type as keys. A tuple can be used as a return value, just like a table, for
+functions that return a complex type. Tuple sets, like the ones returned by
 <code>server.execute</code>, <code>plan:execute</code>, and
 <code>cursor:fetch</code>, are stored in a <em>tupletable</em>. A tupletable
 is similar to an integer-keyed Lua table.</p>
@@ -456,9 +457,17 @@ then the command is executed for all rows that it applies to; otherwise at
 most <code>count</code> rows are returned. <code>count</code> defaults to
 zero. <code>server.execute</code> returns a <em>tupletable</em>.</p>
 
-<h4 id="server_find"><code>server.find(name)</code></h4>
-<p>Finds an existing cursor with name <code>name</code> and returns a cursor
-userdatum or <code>nil</code> if the cursor cannot be found.</p>
+<h4 id="server_rows"><code>server.rows(cmd)</code></h4>
+<p>Returns a function so that the construction</p>
+
+<pre>
+for row in server.rows(cmd) do
+  <em>-- body</em>
+end
+</pre>
+
+<p>iterates over the <em>tuples</em> in the <em>read-only</em> SQL statement
+<code>cmd</code>.</p>
 
 <h4 id="server_prepare"><code>server.prepare(cmd, argtypes)</code></h4>
 <p>Prepares and returns a plan from SQL statement <code>cmd</code>. If
@@ -469,6 +478,10 @@ should not be used outside the current invocation of
 <code>server.prepare</code> since it is freed by <code>SPI_finish</code>. Use
 <a href="#plan_save"><code>plan:save</code></a> if you wish to store the plan
 for latter application.</p>
+
+<h4 id="server_find"><code>server.find(name)</code></h4>
+<p>Finds an existing cursor with name <code>name</code> and returns a cursor
+userdatum or <code>nil</code> if the cursor cannot be found.</p>
 
 <h3 id="plans">Plans</h3>
 <p><em>Plans</em> are used when a command is to be executed repeatedly,
@@ -492,6 +505,34 @@ meaning as in <a href="#server_execute">server.execute</a>.</p>
 <code>name</code> is not a string a random name is selected by the system.
 <code>readonly</code> has the same meaning as in
 <a href="#server_execute">server.execute</a>.</p>
+
+<h4 id="plan_rows"><code>plan:rows(args)</code></h4>
+<p>Returns a function so that the construction</p>
+
+<pre>
+for row in plan:rows(args) do
+  <em>-- body</em>
+end
+</pre>
+
+<p>iterates over the <em>tuples</em> in the execution of a previously prepared
+<em>read-only</em> plan with parameters in table <code>args</code>. It is
+semantically equivalent to:</p>
+
+<pre>
+function plan:rows (cmd)
+  local c = self:getcursor(nil, true) -- read-only
+  return function()
+    local r = c:fetch(1)
+    if r == nil then
+      c:close()
+      return nil
+    else
+      return r[1]
+    end
+  end
+end
+</pre>
 
 <h4 id="plan_issaved"><code>plan:issaved()</code></h4>
 <p>Returns <code>true</code> if plan is saved and <code>false</code>
@@ -532,7 +573,7 @@ CREATE TABLE sometable ( sid int, sname text, sdata text);
 
 CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
   if upvalue == nil then -- plan not cached?
-    local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname = $1"
+    local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname=$1"
     upvalue = server.prepare(cmd, {"text"}):save()
   end
   local c = upvalue:getcursor({i_name}, true) -- read-only
@@ -551,6 +592,20 @@ plan, while local variable <code>c</code> is a cursor that we use to fetch, at
 each loop iteration, a row from <code>upvalue</code> and then yield a new row.
 Note that local <code>r</code> is a tupletable and we need to access
 <code>r[1]</code>.</p>
+
+<p>A more concise version uses <code>plan:rows()</code>:</p>
+
+<pre>
+CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
+  if upvalue == nil then -- plan not cached?
+    local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname=$1"
+    upvalue = server.prepare(cmd, {"text"}):save()
+  end
+  for r in upvalue:rows{i_name} do
+    coroutine.yield(r) -- yield tuple
+  end
+$$ LANGUAGE pllua;
+</pre>
 
 <p>Now, for a more elaborate example, let's store a binary tree:</p>
 
@@ -811,7 +866,7 @@ SOFTWARE.</p>
 &nbsp; :: &nbsp;
 <a href="http://jigsaw.w3.org/css-validator/check/referer">Valid CSS</a>
 <br />
-Last modified: $Date: 2008/03/25 17:22:24 $, $Author: carvalho $.
+Last modified: $Date: 2008/03/30 03:22:12 $, $Author: carvalho $.
 </p>
 </div>
 
