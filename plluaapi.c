@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.17 2008/03/30 02:49:45 carvalho Exp $
+ * $Id: plluaapi.c,v 1.18 2008/03/31 22:57:45 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -444,6 +444,10 @@ lua_State *luaP_newstate (int trusted) {
       "PL/Lua context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
       ALLOCSET_DEFAULT_MAXSIZE);
   lua_State *L = luaL_newstate();
+  /* version */
+  lua_pushliteral(L, PLLUA_VERSION);
+  lua_setglobal(L, "_PLVERSION");
+  /* memory context */
   lua_pushlightuserdata(L, (void *) L);
   lua_pushlightuserdata(L, (void *) mcxt);
   lua_rawset(L, LUA_REGISTRYINDEX);

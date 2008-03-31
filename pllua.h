@@ -1,9 +1,9 @@
 /*
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
- * Version: 0.2
+ * Version: 0.3
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.15 2008/03/30 02:49:45 carvalho Exp $
+ * $Id: pllua.h,v 1.16 2008/03/31 22:57:45 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -26,6 +26,8 @@
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
+
+#define PLLUA_VERSION "PL/Lua 0.3"
 
 typedef struct luaP_Buffer {
   int size;

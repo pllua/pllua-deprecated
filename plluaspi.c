@@ -2,7 +2,7 @@
  * plluaspi.c: PL/Lua SPI
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaspi.c,v 1.18 2008/03/30 02:49:45 carvalho Exp $
+ * $Id: plluaspi.c,v 1.19 2008/03/31 22:57:45 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -267,6 +267,7 @@ static luaP_Tuple *luaP_checktuple (lua_State *L, int pos) {
 /* tuple on top of stack */
 HeapTuple luaP_totuple (lua_State *L) {
   luaP_Tuple *t = luaP_checktuple(L, -1);
+  if (t == NULL) return NULL; /* not a tuple */
   return (t->changed == 1) ? luaP_copytuple(t) : t->tuple;
 }
 
