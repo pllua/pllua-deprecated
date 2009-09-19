@@ -22,8 +22,7 @@ typedef struct RowStamp {
 #endif
 } RowStamp;
 
-static inline void rowstamp_set(RowStamp *stamp, HeapTuple tup)
-{
+static void rowstamp_set(RowStamp *stamp, HeapTuple tup) {
 	stamp->xmin = HeapTupleHeaderGetXmin(tup->t_data);
 #ifdef ROWSTAMP_PRE83
 	stamp->cmin = HeapTupleHeaderGetCmin(tup->t_data);
@@ -32,8 +31,7 @@ static inline void rowstamp_set(RowStamp *stamp, HeapTuple tup)
 #endif
 }
 
-static inline bool rowstamp_check(RowStamp *stamp, HeapTuple tup)
-{
+static bool rowstamp_check(RowStamp *stamp, HeapTuple tup) {
 	return stamp->xmin == HeapTupleHeaderGetXmin(tup->t_data)
 #ifdef ROWSTAMP_PRE83
 		&& stamp->cmin == HeapTupleHeaderGetCmin(tup->t_data);

@@ -1,5 +1,5 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.10 2008/03/30 03:49:04 carvalho Exp $
+# $Id: Makefile,v 1.11 2009/09/19 16:20:45 carvalho Exp $
 
 # Lua specific
 
@@ -23,6 +23,8 @@ OBJS = pllua.o plluaapi.o plluaspi.o
 PG_CPPFLAGS = $(LUAINC)
 SHLIB_LINK = $(LUALIB)
 
-PGXS := $(shell pg_config --pgxs)
+#PG_CONFIG = /usr/local/pgsql/bin/pg_config
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 

@@ -3,7 +3,7 @@
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Version: 0.3
  * Please check copyright notice at the bottom of this file
- * $Id: pllua.h,v 1.16 2008/03/31 22:57:45 carvalho Exp $
+ * $Id: pllua.h,v 1.17 2009/09/19 16:20:45 carvalho Exp $
  */
 
 /* PostgreSQL */
@@ -22,6 +22,9 @@
 #include <utils/memutils.h>
 #include <utils/syscache.h>
 #include <utils/typcache.h>
+#include <utils/datum.h>
+#include <utils/builtins.h>
+#include <utils/array.h>
 /* Lua */
 #include <lua.h>
 #include <lualib.h>

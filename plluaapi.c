@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.18 2008/03/31 22:57:45 carvalho Exp $
+ * $Id: plluaapi.c,v 1.19 2009/09/19 16:20:45 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -43,7 +43,6 @@ static const char PLLUA_TYPEINFO[] = "typeinfo";
 static const char PLLUA_DATUM[] = "datum";
 
 #define PLLUA_LOCALVAR "upvalue"
-#define PLLUA_LOCALVARSZ 7
 #define PLLUA_SHAREDVAR "shared"
 #define PLLUA_SPIVAR "server"
 #define PLLUA_TRIGGERVAR "trigger"
@@ -63,8 +62,7 @@ static const char PLLUA_DATUM[] = "datum";
 #define att_align_nominal(len, typ) att_align(len, typ)
 #endif
 
-#define info(msg) ereport(INFO, \
-    (errcode(ERRCODE_SUCCESSFUL_COMPLETION), errmsg msg))
+#define info(msg) ereport(INFO, (errmsg("%s", msg)))
 #define argerror(type) \
   elog(ERROR, "[pllua]: type '%s' (%d) not supported as argument", \
       format_type_be(type), (type))
@@ -376,35 +374,32 @@ static int luaP_print (lua_State *L) {
   }
   luaL_pushresult(&b);
   s = lua_tostring(L, -1);
-  info((s));
+  info(s);
   lua_pop(L, 1);
   return 0;
 }
 
 static int luaP_info (lua_State *L) {
   luaL_checkstring(L, 1);
-  info((lua_tostring(L, 1)));
+  info(lua_tostring(L, 1));
   return 0;
 }
 
 static int luaP_log (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(LOG, (errcode(ERRCODE_SUCCESSFUL_COMPLETION),
-        errmsg(lua_tostring(L, 1))));
+  ereport(LOG, (errmsg("%s", lua_tostring(L, 1))));
   return 0;
 }
 
 static int luaP_notice (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(NOTICE, (errcode(ERRCODE_SUCCESSFUL_COMPLETION),
-        errmsg(lua_tostring(L, 1))));
+  ereport(NOTICE, (errmsg("%s", lua_tostring(L, 1))));
   return 0;
 }
 
 static int luaP_warning (lua_State *L) {
   luaL_checkstring(L, 1);
-  ereport(WARNING, (errcode(ERRCODE_WARNING),
-        errmsg(lua_tostring(L, 1))));
+  ereport(WARNING, (errmsg("%s", lua_tostring(L, 1))));
   return 0;
 }
 
@@ -502,7 +497,7 @@ lua_State *luaP_newstate (int trusted) {
   /* load pllua.init modules */
   status = luaP_modinit(L);
   if (status != 0) /* SPI or module loading error? */
-    elog(ERROR, lua_tostring(L, -1));
+    elog(ERROR, "%s", lua_tostring(L, -1));
   /* set alias for _G */
   lua_pushvalue(L, LUA_GLOBALSINDEX);
   lua_setglobal(L, PLLUA_SHAREDVAR); /* _G.shared = _G */
@@ -517,7 +512,7 @@ lua_State *luaP_newstate (int trusted) {
     const char *package_keys[] = {
       "preload", "loadlib", "loaders", "seeall", NULL};
     const char *global_keys[] = {
-      "require", "module", "dofile", "loadfile", NULL};
+      "require", "module", "dofile", "load", "loadfile", "loadstring", NULL};
     const char **s;
     /* clean package module */
     lua_getfield(L, LUA_GLOBALSINDEX, "package");
@@ -625,7 +620,8 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   /* read func name */
   fname = NameStr(procst->proname);
   /* prepare header: "local upvalue,f f=function(" */
-  luaL_addlstring(&b, "local " PLLUA_LOCALVAR ",", 7 + PLLUA_LOCALVARSZ);
+  luaL_addlstring(&b, "local " PLLUA_LOCALVAR ",",
+      7 + sizeof(PLLUA_LOCALVAR));
   luaL_addlstring(&b, fname, strlen(fname));
   luaL_addchar(&b, ' ');
   luaL_addlstring(&b, fname, strlen(fname));
