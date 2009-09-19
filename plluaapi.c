@@ -2,7 +2,7 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.19 2009/09/19 16:20:45 carvalho Exp $
+ * $Id: plluaapi.c,v 1.20 2009/09/19 16:56:38 carvalho Exp $
  */
 
 #include "pllua.h"
@@ -621,7 +621,7 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   fname = NameStr(procst->proname);
   /* prepare header: "local upvalue,f f=function(" */
   luaL_addlstring(&b, "local " PLLUA_LOCALVAR ",",
-      7 + sizeof(PLLUA_LOCALVAR));
+      6 + sizeof(PLLUA_LOCALVAR));
   luaL_addlstring(&b, fname, strlen(fname));
   luaL_addchar(&b, ' ');
   luaL_addlstring(&b, fname, strlen(fname));
