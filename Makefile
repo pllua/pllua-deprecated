@@ -1,5 +1,5 @@
 # Makefile for PL/Lua
-# $Id: Makefile,v 1.11 2009/09/19 16:20:45 carvalho Exp $
+# $Id: Makefile,v 1.12 2009/09/20 14:20:48 carvalho Exp $
 
 # Lua specific
 
@@ -14,6 +14,10 @@ LUALIB = -llua
 # Fink
 #LUAINC = -I/sw/include -I/sw/include/postgresql
 #LUALIB = -L/sw/lib -llua
+
+# Lua for Windows
+#LUAINC = -IC:/PROGRA~1/Lua/5.1/include
+#LUALIB = -LC:/PROGRA~1/Lua/5.1/lib -llua5.1
 
 # no need to edit below here
 MODULE_big = pllua
