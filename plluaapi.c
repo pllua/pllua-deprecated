@@ -38,7 +38,7 @@ typedef struct luaP_Info {
 /* extended type info */
 typedef struct luaP_Typeinfo {
   int oid;
-  int2 len;
+  int16 len;
   char type;
   char align;
   bool byval;
@@ -609,7 +609,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
   }
   /* read result type */
   ti = luaP_gettypeinfo(L, rettype);
-  if (ti->type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID) 
+  if (ti->type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID)
     ereport(ERROR,
         (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
          errmsg("[pllua]: functions cannot return type '%s'",
