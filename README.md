@@ -5,7 +5,7 @@ PL/Lua is an implementation of Lua as a loadable procedural language for Postgre
 
 ## Introduction
 
-What PL/Lua is
+### What PL/Lua is
 
 **PL/Lua** is an implementation of [Lua][8] as a loadable procedural language for [PostgreSQL][9]: with PL/Lua you can use PostgreSQL functions and triggers written in the Lua programming language.
 
@@ -14,20 +14,20 @@ Procedural languages offer many extra capabilities to PostgreSQL, similar to C l
 PL/Lua brings the power and simplicity of Lua to PostgreSQL, including: small memory footprint, simple syntax, lexical scoping, functions as first-class values, and coroutines for non-preemptive threading. As a simple example, consider the following hello function:
 
 ```
-    # CREATE FUNCTION hello(name text) RETURNS text AS $$
-      return string.format("Hello, %s!", name)
-    $$ LANGUAGE pllua;
-    CREATE FUNCTION
-    # SELECT hello('PostgreSQL');
-           hello
-    --------------------
-     Hello, PostgreSQL!
-    (1 row)
+# CREATE FUNCTION hello(name text) RETURNS text AS $$
+  return string.format("Hello, %s!", name)
+$$ LANGUAGE pllua;
+CREATE FUNCTION
+# SELECT hello('PostgreSQL');
+       hello
+--------------------
+ Hello, PostgreSQL!
+(1 row)
 ```
 
-The next sections present more examples where other features are used. In the [Languages][2] section the two flavors of PL/Lua are described; the [Functions][4] section details how functions are registered in PL/Lua and how arguments are treated; [Database access][5] presents the SPI interface to PL/Lua; and [Triggers][10] shows how triggers can be declared.
+The next sections present more examples where other features are used. In the [Languages](#languages) section the two flavors of PL/Lua are described; the [Functions](#functions) section details how functions are registered in PL/Lua and how arguments are treated; [Database access](#database-access) presents the SPI interface to PL/Lua; and [Triggers](#triggers) shows how triggers can be declared.
 
-PL/Lua is licensed under the [same license as Lua][11] \-- the [MIT license][12] \-- and so can be freely used for academic and commercial purposes. Please refer to the [Installation][7] section for more details.
+PL/Lua is licensed under the [same license as Lua][11] \-- the [MIT license][12] \-- and so can be freely used for academic and commercial purposes. Please refer to the [Installation](#installation) section for more details.
 
 ## Languages
 
@@ -38,8 +38,8 @@ PL/Lua is available as either a _trusted_ (`pllua`) or an _untrusted_ (`plluau`)
 Unprivileged users can only create functions using the trusted version of PL/Lua, `pllua`. The environment in `pllua` is more restricted: only `table`, `string`, and `math` libraries are fully loaded, the `os` library is restricted, the `package` library is not available, that is, there is no module system (including `require`), and the global table is restricted for writing. The following table summarizes the differences:
 
 
-| ----- |
-|  **Table** |  **`plluau`** |  **`pllua`** |
+|    |  `plluau` |  `pllua` |
+| ----- | ------ | ------- |
 |  `table, string, math` |  All functions |  All functions |
 |  `os` |  All functions |  `date, clock, time, difftime` |
 |  `package` (module system) |  All functions |  None |
@@ -47,15 +47,15 @@ Unprivileged users can only create functions using the trusted version of PL/Lua
 
 Even though the module system is absent in `pllua`, PL/Lua allows for modules to be automatically loaded after creating the environment: all entries in table `_pllua.init_` are `require`'d at startup.
 
-To facilitate the use of PL/Lua and following the tradition of other PLs, the global table is aliased to `shared`. Moreover, write access to the global table in `pllua` is restricted to avoid pollution; global variables should then be created with [`setshared`][13].
+To facilitate the use of PL/Lua and following the tradition of other PLs, the global table is aliased to `shared`. Moreover, write access to the global table in `pllua` is restricted to avoid pollution; global variables should then be created with [`setshared`](#setsharedvarname--value).
 
-Finally, errors in PL/Lua are propagated to the calling query and the transaction is aborted if the error is not caught. Messages can be emitted by [`log`][14], `info`, `notice`, and `warning` at log levels LOG, INFO, NOTICE, and WARNING respectively. In particular, `print` emits log messages of level INFO.
+Finally, errors in PL/Lua are propagated to the calling query and the transaction is aborted if the error is not caught. Messages can be emitted by [`log`](#logmsg), `info`, `notice`, and `warning` at log levels LOG, INFO, NOTICE, and WARNING respectively. In particular, `print` emits log messages of level INFO.
 
-#### `log(msg)`
+##### `log(msg)`
 
 Emits message `msg` at log level LOG. Similar functions `info`, `notice`, and `warning` have the same signature but emit `msg` at their respective log levels.
 
-#### `setshared(varname [, value])`
+##### `setshared(varname [, value])`
 
 Sets global `varname` to `value`, which defaults to `true`. It is semantically equivalent to `shared[varname] = value`.
 
@@ -66,8 +66,8 @@ Data values in PL/Lua
 PL/Lua makes no conversion of function arguments to string/text form between Lua and PostgreSQL. Basic data types are natively supported, that is, converted directly, by value, to a Lua equivalent. The following table shows type equivalences:
 
 
-| ----- |
-|  **PostgreSQL type** |  **Lua type** |
+|  PostgreSQL type |  Lua type |
+| ----- | ----- |
 |  `bool` |  `boolean` |
 |  `float4, float8, int2, int4` |  `number` |
 |  `text, char, varchar` |  `string` |
@@ -76,7 +76,7 @@ PL/Lua makes no conversion of function arguments to string/text form between Lua
 
 Base and domain types other than the ones in the first three rows in the table are converted to a _raw datum_ userdata in Lua with a suitable `__tostring` metamethod based on the type's output function. Conversely, `fromstring` takes a type name and a string and returns a raw datum from the provided type's input function. Arrays are converted to Lua tables with integer indices, while composite types become tables with keys corresponding to attribute names.
 
-#### `fromstring(tname, s)`
+##### `fromstring(tname, s)`
 
 Returns a raw datum userdata for `s` of type `tname` using `tname`'s input function to convert `s`.
 
@@ -142,14 +142,14 @@ Moreover, as can be seen in the composition of `func` above, PL/Lua functions ar
       end
     end
     do
-      _U = 0 _-- counter_
+      _U = 0 -- counter
       counter = coroutine.wrap(counter)
     $$ LANGUAGE pllua;
 ```
 
 Function `counter` is similar to an iterator, returning consecutive integers every time it is called, starting at one. Note that we need to add `end` to finish the function definition body and `do` to start a new block since the process of function composition always appends an `end`. It is important to observe that what actually gets defined as `counter` is a wrapper around a coroutine.
 
-From [Types][3] we know that composite types can be accessed as tables with keys corresponding to attribute names:
+From [Types](#types) we know that composite types can be accessed as tables with keys corresponding to attribute names:
 
 ```lua
     CREATE TYPE greeting AS (how text, who text);
@@ -173,14 +173,14 @@ Set-returning functions (SRFs) are implemented in PL/Lua using coroutines. When 
 with this usage example:
 
 ```sql
-    # SELECT makegreeting(greetingset, '%s, %s!') FROM
+# SELECT makegreeting(greetingset, '%s, %s!') FROM
       (SELECT greetingset('Hello', ARRAY['foo', 'bar', 'psql'])) AS q;
-     makegreeting
-    --------------
-     Hello, foo!
-     Hello, bar!
-     Hello, psql!
-    (3 rows)
+ makegreeting
+ --------------
+ Hello, foo!
+ Hello, bar!
+ Hello, psql!
+(3 rows)
 ```
 
 Now, to further illustrate the use of arrays in PL/Lua, we adapt an [example][15] from _[Programming in Lua_][16]:
@@ -190,36 +190,35 @@ Now, to further illustrate the use of arrays in PL/Lua, we adapt an [example][15
       _U(a, #a)
     end
     do
-      _U = function (a, n) _-- permgen in PiL_
+      _U = function (a, n) -- permgen in PiL
         if n == 0 then
-          coroutine.yield(a) _-- return next SRF row_
+          coroutine.yield(a) -- return next SRF row
         else
           for i = 1, n do
-            a[n], a[i] = a[i], a[n] _-- i-th element as last one_
-            _U(a, n - 1) _-- recurse on head_
-            a[n], a[i] = a[i], a[n] _-- restore i-th element_
+            a[n], a[i] = a[i], a[n] -- i-th element as last one
+            _U(a, n - 1) -- recurse on head
+            a[n], a[i] = a[i], a[n] -- restore i-th element
           end
         end
       end
     $$ LANGUAGE pllua;
 ```
 
-As stated in [Languages][2], it is possible to access the global table of PL/Lua's state. However, as noted before, since PL/Lua functions are closures, creating global variables should be restricted to cases where data is to be shared between different functions. The following simple example defines a getter-setter pair to access a shared variable `counter`:
+As stated in [Languages](#languages), it is possible to access the global table of PL/Lua's state. However, as noted before, since PL/Lua functions are closures, creating global variables should be restricted to cases where data is to be shared between different functions. The following simple example defines a getter-setter pair to access a shared variable `counter`:
 
 ```lua
     CREATE FUNCTION getcounter() RETURNS integer AS $$
-      if shared.counter == nil then _-- not cached?_
+      if shared.counter == nil then -- not cached?
         setshared("counter", 0)
       end
-      return counter _-- _G.counter == shared.counter_
+      return counter -- _G.counter == shared.counter
     $$ LANGUAGE pllua;
-```
-```lua
+
     CREATE FUNCTION setcounter(c integer) RETURNS void AS $$
-      if shared.counter == nil then _-- not cached?_
+      if shared.counter == nil then -- not cached?
         setshared("counter", c)
       else
-        counter = c _-- _G.counter == shared.counter_
+        counter = c -- _G.counter == shared.counter
       end
     $$ LANGUAGE pllua;
 ```
@@ -233,7 +232,7 @@ Let's revisit our (rather inefficient) recursive Fibonacci function `fib`. A bet
       return _U(n, 0, 1)
     end
     _U = function(n, a, b) -- tail recursive
-      if n &lt; 1 then
+      if n > 1 then
         return b
       else
         return _U(n - 1, b, a + b)
@@ -245,7 +244,7 @@ We can also use the upvalue `_U` as a cache to store previous elements in the se
 
 ```lua
     CREATE FUNCTION fibm(n integer) RETURNS integer AS $$
-      if n &lt; 3 then
+      if n > 3 then
         return n
       else
         local v = _U[n]
@@ -281,7 +280,7 @@ Anonymous code blocks are also supported in PL/Lua. The following prototype
 
 ```lua
     DO $$
-      _-- Lua chunk_
+      -- Lua chunk
     $$ LANGUAGE [pllua | plluau];
 ```
 
@@ -304,31 +303,31 @@ compiles and executes the Lua chunk. Here are some examples:
 
 Server interface in PL/Lua
 
-The server interface in PL/Lua comprises the methods in table `server` and userdata `plan`, `cursor`, `tuple`, and `tupletable`. The entry point to the SPI is the table `server`: `server.execute` executes a SQL command, `server.find` retrieves a [cursor][17], and `server.prepare` prepares, but does not execute, a SQL command into a [plan][18].
+The server interface in PL/Lua comprises the methods in table `server` and userdata `plan`, `cursor`, `tuple`, and `tupletable`. The entry point to the SPI is the table `server`: `server.execute` executes a SQL command, `server.find` retrieves a [cursor](#cursors), and `server.prepare` prepares, but does not execute, a SQL command into a [plan](#plans).
 
 A _tuple_ represents a composite type, record, or row. It can be accessed similarly to a Lua table, by simply indexing fields in the composite type as keys. A tuple can be used as a return value, just like a table, for functions that return a complex type. Tuple sets, like the ones returned by `server.execute`, `plan:execute`, and `cursor:fetch`, are stored in a _tupletable_. A tupletable is similar to an integer-keyed Lua table.
 
-####  `server.execute(cmd, readonly [, count])`
+#####  `server.execute(cmd, readonly [, count])`
 
 Executes the SQL statement `cmd` for `count` rows. If `readonly` is `true`, the command is assumed to be read-only and execution overhead is reduced. If `count` is zero then the command is executed for all rows that it applies to; otherwise at most `count` rows are returned. `count` defaults to zero. `server.execute` returns a _tupletable_.
 
-#### `server.rows(cmd)`
+##### `server.rows(cmd)`
 
 Returns a function so that the construction
 
 ```lua
     for row in server.rows(cmd) do
-      -- body_
+      -- body
     end
 ```
 
 iterates over the _tuples_ in the _read-only_ SQL statement `cmd`.
 
-#### `server.prepare(cmd, argtypes)`
+##### `server.prepare(cmd, argtypes)`
 
-Prepares and returns a plan from SQL statement `cmd`. If `cmd` specifies input parameters, their types should be specified in table `argtypes`. The plan can be executed with [`plan:execute`][19]. The returned plan should not be used outside the current invocation of `server.prepare` since it is freed by `SPI_finish`. Use [`plan:save`][20] if you wish to store the plan for latter application.
+Prepares and returns a plan from SQL statement `cmd`. If `cmd` specifies input parameters, their types should be specified in table `argtypes`. The plan can be executed with [`plan:execute`](#planexecuteargs-readonly--count). The returned plan should not be used outside the current invocation of `server.prepare` since it is freed by `SPI_finish`. Use [`plan:save`](#plansave) if you wish to store the plan for latter application.
 
-#### `server.find(name)`
+##### `server.find(name)`
 
 Finds an existing cursor with name `name` and returns a cursor userdatum or `nil` if the cursor cannot be found.
 
@@ -336,15 +335,15 @@ Finds an existing cursor with name `name` and returns a cursor userdatum or `nil
 
 _Plans_ are used when a command is to be executed repeatedly, possibly with different arguments. In this case, we can prepare a plan with `server.prepare` and execute it later with `plan:execute` (or using a cursor). It is also possible to save a plan with `plan:save` if we want to keep the plan for longer than the current transaction.
 
-####  `plan:execute(args, readonly [, count])`
+#####  `plan:execute(args, readonly [, count])`
 
-Executes a previously prepared plan with parameters in table `args`. `readonly` and `count` have the same meaning as in [server.execute][21].
+Executes a previously prepared plan with parameters in table `args`. `readonly` and `count` have the same meaning as in [server.execute](#serverexecutecmd-readonly--count).
 
-####  `plan:getcursor(args, readonly [, name])`
+#####  `plan:getcursor(args, readonly [, name])`
 
-Sets up a cursor with name `name` from a prepared plan. If `name` is not a string a random name is selected by the system. `readonly` has the same meaning as in [server.execute][21].
+Sets up a cursor with name `name` from a prepared plan. If `name` is not a string a random name is selected by the system. `readonly` has the same meaning as in [server.execute](#serverexecutecmd-readonly--count).
 
-#### `plan:rows(args)`
+##### `plan:rows(args)`
 
 Returns a function so that the construction
 
@@ -371,11 +370,11 @@ iterates over the _tuples_ in the execution of a previously prepared _read-only_
     end
 ```
 
-#### `plan:issaved()`
+##### `plan:issaved()`
 
 Returns `true` if plan is saved and `false` otherwise.
 
-#### `plan:save()`
+##### `plan:save()`
 
 Saves a prepared plan for subsequent invocations in the current session.
 
@@ -383,15 +382,15 @@ Saves a prepared plan for subsequent invocations in the current session.
 
 _Cursors_ execute previously prepared plans. Cursors provide a more powerful abstraction than simply executing a plan, since we can fetch results and move in a query both forward and backward. Moreover, we can limit the number of rows to be retrieved, and so avoid memory overruns for large queries in contrast to direct plan execution. Another advantage is that cursors can outlive the current procedure, living to the end of the current transaction.
 
-#### `cursor:fetch([count])`
+##### `cursor:fetch([count])`
 
 Fetches at most `count` rows from a cursor. If `count` is `nil` or zero then all rows are fetched. If `count` is negative the fetching runs backward.
 
-#### `cursor:move([count])`
+##### `cursor:move([count])`
 
 Skips `count` rows in a cursor, where `count` defaults to zero. If `count` is negative the moving runs backward.
 
-#### `cursor:close()`
+##### `cursor:close()`
 
 Closes a cursor.
 
@@ -448,8 +447,8 @@ which we can fill using:
       local p = server.prepare("insert into " .. t .. " values($1, $2, $3)",
         {"int4", "int4", "int4"})
       for i = 1, n do
-        local lchild, rchild = 2 * i, 2 * i + 1 _-- siblings_
-        p:execute{i, lchild, rchild} _-- insert values_
+        local lchild, rchild = 2 * i, 2 * i + 1 -- siblings
+        p:execute{i, lchild, rchild} -- insert values
       end
     $$ LANGUAGE pllua;
 ```
@@ -462,9 +461,9 @@ We can perform a preorder traversal of the tree with:
     CREATE FUNCTION preorder (t text, s int) RETURNS SETOF int AS $$
       coroutine.yield(s)
       local q = server.execute("select * from " .. t .. " where id=" .. s,
-          true, 1) _-- read-only, only 1 result_
+          true, 1) -- read-only, only 1 result
       if q ~= nil then
-        local lchild, rchild = q[1].lchild, q[1].rchild _-- store before next query_
+        local lchild, rchild = q[1].lchild, q[1].rchild -- store before next query
         if lchild ~= nil then preorder(t, lchild) end
         if rchild ~= nil then preorder(t, rchild) end
       end
@@ -478,21 +477,21 @@ In `preorder` we executed a query many times. For our postorder traversal below 
 ```lua
     CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
       local p = _U[t]
-      if p == nil then _-- plan not cached?_
+      if p == nil then -- plan not cached?
         p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
         _U[t] = p:save()
       end
-      local c = p:getcursor({s}, true) _-- read-only_
-      local q = c:fetch(1) _-- one row_
+      local c = p:getcursor({s}, true) -- read-only
+      local q = c:fetch(1) -- one row
       if q ~= nil then
-        local lchild, rchild = q[1].lchild, q[1].rchild _-- store before next query_
+        local lchild, rchild = q[1].lchild, q[1].rchild -- store before next query
         c:close()
         if lchild ~= nil then postorder(t, lchild) end
         if rchild ~= nil then postorder(t, rchild) end
       end
       coroutine.yield(s)
     end
-    do _U = {} _-- plan cache_
+    do _U = {} -- plan cache
     $$ LANGUAGE pllua;
 ```
 
@@ -503,8 +502,8 @@ Triggers in PL/Lua
 Triggers can be defined in PL/Lua as usual by just creating a function returning `trigger`. When a function returns a trigger, PL/Lua creates a (global) table _`trigger`_ containing all necessary information. The `trigger` table is described below.
 
 
-| ----- |
-|  **Key** |  **Value** |
+|  Key |  Value |
+| ----- | ----- |
 |  `name` |  trigger name |
 |  `when` |  `"before"` if trigger fired before or `"after"` if trigger fired after  |
 |  `level` |  `"row"` if row-level trigger or `"statement"` if statement-level trigger  |
@@ -527,18 +526,18 @@ Let's restrict row operations in our previous binary tree example: updates are n
     create function treetrigger() returns trigger as $$
       local row, operation = trigger.row, trigger.operation
       if operation == "update" then
-        trigger.row = nil _-- updates not allowed_
+        trigger.row = nil -- updates not allowed
       elseif operation == "insert" then
         local id, lchild, rchild = row.id, row.lchild, row.rchild
-        if lchild == rchild or id == lchild or id == rchild _-- avoid loops_
-            or (lchild ~= nil and _U.intree(lchild)) _-- avoid cycles_
+        if lchild == rchild or id == lchild or id == rchild -- avoid loops
+            or (lchild ~= nil and _U.intree(lchild)) -- avoid cycles
             or (rchild ~= nil and _U.intree(rchild))
-            or (_U.nonemptytree() and not _U.isleaf(id)) _-- not leaf?_
+            or (_U.nonemptytree() and not _U.isleaf(id)) -- not leaf?
             then
-          trigger.row = nil _-- skip operation_
+          trigger.row = nil -- skip operation
         end
-      else _-- operation == "delete"_
-        if not _U.isleafparent(row.id) then _-- not both leaf parent?_
+      else -- operation == "delete"
+        if not _U.isleafparent(row.id) then -- not both leaf parent?
           trigger.row = nil
         end
       end
@@ -550,7 +549,7 @@ Let's restrict row operations in our previous binary tree example: updates are n
           return plan:execute({...}, true) ~= nil
         end
       end
-      _U = { _-- plan closures_
+      _U = { -- plan closures
         nonemptytree = getter("select * from tree"),
         intree = getter("select node from (select id as node from tree "
           .. "union select lchild from tree union select rchild from tree) as q "
@@ -579,8 +578,8 @@ How to obtain and install PL/Lua
 PL/Lua is distributed as a source package and can be obtained at [PgFoundry][22]. Depending on how Lua is installed in your system you might have to edit the Makefile. After that the source package is installed like any regular PostgreSQL module, that is, after downloading and unpacking, just run:
 
 ```
-    $ make &amp;&amp; sudo make install
-    $ psql -c "CREATE EXTENSION pllua" _mydb_
+    $ make && sudo make install
+    $ psql -c "CREATE EXTENSION pllua" mydb
 ```
 
 The `pllua` extension installs both trusted and untrusted flavors of PL/Lua and creates the module table `pllua.init`. Alternatively, a systemwide installation though the PL template facility can be achieved with:
@@ -605,27 +604,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 
-[1]: http://pllua.projects.pgfoundry.org#introduction
-[2]: http://pllua.projects.pgfoundry.org#languages
-[3]: http://pllua.projects.pgfoundry.org#types
-[4]: http://pllua.projects.pgfoundry.org#functions
-[5]: http://pllua.projects.pgfoundry.org#database
-[6]: http://pllua.projects.pgfoundry.org#triggers
-[7]: http://pllua.projects.pgfoundry.org#installation
 [8]: http://www.lua.org
 [9]: http://www.postgresql.org
-[10]: http://pllua.projects.pgfoundry.org/triggers
 [11]: http://www.lua.org/license.html
 [12]: http://www.opensource.org/licenses/mit-license.php
-[13]: http://pllua.projects.pgfoundry.org#setshared
-[14]: http://pllua.projects.pgfoundry.org#log
 [15]: http://www.lua.org/pil/9.3.html
 [16]: http://www.lua.org/pil
-[17]: http://pllua.projects.pgfoundry.org#cursors
-[18]: http://pllua.projects.pgfoundry.org#plans
-[19]: http://pllua.projects.pgfoundry.org#plan_execute
-[20]: http://pllua.projects.pgfoundry.org#plan_save
-[21]: http://pllua.projects.pgfoundry.org#server_execute
 [22]: http://pgfoundry.org/projects/pllua
 
   
