@@ -4,8 +4,8 @@
 # Lua specific
 
 # General
-LUAINC = -I/usr/local/include
-LUALIB = -L/usr/local/lib -llua
+LUAINC ?= -I/usr/local/include
+LUALIB ?= -L/usr/local/lib -llua
 
 # LuaJIT
 #LUAINC = -I/usr/local/include/luajit-2.0
@@ -36,7 +36,7 @@ PG_CPPFLAGS = $(LUAINC)
 SHLIB_LINK = $(LUALIB)
 
 #PG_CONFIG = /usr/local/pgsql/bin/pg_config
-PG_CONFIG = pg_config
+PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
