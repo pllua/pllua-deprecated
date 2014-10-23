@@ -4,8 +4,12 @@
 # Lua specific
 
 # General
-LUAINC =
-LUALIB = -llua
+LUAINC = -I/usr/local/include
+LUALIB = -L/usr/local/lib -llua
+
+# LuaJIT
+#LUAINC = -I/usr/local/include/luajit-2.0
+#LUALIB = -L/usr/local/lib -lluajit-5.1
 
 # Debian/Ubuntu
 #LUAINC = -I/usr/include/lua5.1
@@ -19,9 +23,13 @@ LUALIB = -llua
 #LUAINC = -IC:/PROGRA~1/Lua/5.1/include
 #LUALIB = -LC:/PROGRA~1/Lua/5.1/lib -llua5.1
 
+
 # no need to edit below here
 MODULE_big = pllua
-DATA_built = pllua.sql
+EXTENSION = pllua
+DATA = pllua--1.0.sql
+#DATA_built = pllua.sql
+
 REGRESS = plluatest
 OBJS = pllua.o plluaapi.o plluaspi.o
 PG_CPPFLAGS = $(LUAINC)

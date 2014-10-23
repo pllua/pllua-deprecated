@@ -1,0 +1,389 @@
+/* Basic style */
+/* $Id: style.css,v 1.4 2008-01-09 17:36:55 carvalho Exp $ */
+
+/* =====  Typography and colors  ===== */
+
+body {
+  font-size: 11pt;
+  font-family: 'Lucida Grande', Geneva, Verdana, Arial, Helvetica, sans-serif;
+  background-color: #567;
+  color: #222;
+  text-align: center;
+}
+
+#page {
+  background-color: #fff;
+  border: 1px solid #868fa0;
+  text-align: left;
+}
+
+a, h2 a:hover, h3 a:hover {
+  color: #900;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #000080;
+  background-color: #f0f0ff;
+  text-decoration: underline;
+}
+
+a:visited {
+  color: #000080;
+}
+
+#header {
+  background-color: #fff;
+  font-size: 1.4em;
+  text-align: center;
+}
+
+#headerimg {
+  background: url("images/splash.jpg") no-repeat bottom center;
+}
+
+#horizbar {
+  margin-top: 10px;
+  padding: 2px 0 2px;
+  background-color: #eee;
+  /* font-size: 1.05em; */
+  text-align: center;
+  border-top: 1px solid #868fa0;
+  border-bottom: 1px solid #868fa0;
+}
+
+#horizbar a:hover {
+  background-color: #e0e0ff;
+}
+
+.content {
+  line-height: 1.2em;
+  text-align: justify;
+}
+
+.content .comment {
+  text-align: center;
+}
+
+#footer {
+  background-color: #eee;
+  border-top: 1px solid #868fa0;
+}
+
+small {
+  font-family: 'Lucida Grande', Geneva, Verdana, Arial, Helvetica, sans-serif;
+  font-size: 0.9em;
+  line-height: 1.5em;
+}
+
+h1, h2, h3, h4 {
+  font-family: 'Lucida Grande', Geneva, Verdana, Arial, Helvetica, sans-serif;
+  font-weight: bold;
+}
+
+h1 { font-size: 1.5em; }
+
+.description {
+  font-size: 1.2em;
+  text-align: left;
+}
+
+h2 { font-size: 1.25em; }
+
+h3 { font-size: 1.15em; }
+
+h4 { font-size: 1.05em; }
+
+#sidebar
+{
+  background-color: #eee;
+}
+
+#sidebar h2 {
+  font-family: 'Lucida Grande', Verdana, Sans-Serif;
+  font-size: 1.1em;
+  background: #d0d0ff;
+}
+
+h1, h1 a, h1 a:hover, h1 a:visited, .description {
+  text-decoration: none;
+  color: #000080;
+}
+
+h2, h2 a, h2 a:visited,
+h3, h3 a, h3 a:visited,
+h4, h4 a, h4 a:visited {
+  color: #000080;
+}
+
+h2, h2 a, h2 a:hover, h2 a:visited,
+h3, h3 a, h3 a:hover, h3 a:visited,
+#sidebar h2, cite {
+  text-decoration: none;
+}
+
+#sidebar {
+  font: 1em 'Lucida Grande', Verdana, Arial, Sans-Serif;
+}
+
+small,
+#sidebar ul ul li,
+#sidebar ul ol li,
+.comment,
+blockquote, strike {
+  color: #868fa0;
+}
+  
+
+/* =====  Structure  ===== */
+
+body {
+  margin: 0;
+  padding: 0; 
+}
+
+#page {
+  margin: 0px auto;
+  padding: 0;
+  width: 85%;
+}
+  
+#header {
+  padding: 0;
+  margin: 0 auto;
+  width: 100%;
+}
+
+#headerimg {
+  padding: 0;
+  margin: 0 auto;
+  height: 200px;
+  width: 100%;
+}
+
+#title {
+  height: 200px;
+  width: 100%;
+}
+
+.content {
+  padding: 0 0 20px 0;
+  margin: 5px 50px 30px 50px;
+  width: 90%;
+}
+
+.content .comment {
+  margin: 10px 0;
+}
+
+#footer {
+  padding: 0;
+  margin: 0 auto;
+  width: 100%;
+  clear: both;
+}
+
+#footer p {
+  margin: 0;
+  padding: 20px 0;
+  text-align: center;
+}
+
+#sidebar
+{
+  padding: 20px 0 5px 0;
+  margin-left: 605px;
+  width: 130px;
+}
+
+
+/* =====  Headers  ===== */
+
+h1 {
+  padding-top: 8px;
+  margin: 0;
+}
+
+h2 {
+  margin: 30px 0 0;
+}
+
+#sidebar h2 {
+  margin: 0;
+  padding-left: 5px;
+}
+
+h3 {
+  padding: 0;
+  margin: 30px 0 0;
+}
+
+#header h3 {
+  margin: 5px;
+}
+
+h4 {
+  padding: 0;
+  margin: 20px 0 -10px;
+}
+
+/* =====  Images  ===== */
+
+p img {
+  padding: 0;
+  max-width: 100%;
+}
+
+#header img {
+  margin-top: 20px;
+}
+
+img.centered {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+  
+img.alignright {
+  padding: 4px;
+  margin: 0 0 2px 7px;
+  display: inline;
+}
+
+img.alignleft {
+  padding: 4px;
+  margin: 0 7px 2px 0;
+  display: inline;
+}
+
+.alignright {
+  float: right;
+}
+  
+.alignleft {
+  float: left
+}
+
+
+/* =====  Lists  ===== */
+
+html>body .content ul {
+  margin-left: 0px;
+  padding: 0 0 0 30px;
+  padding-left: 10px;
+  text-indent: -10px;
+} 
+
+html>body .content li {
+  margin: 7px 0 8px 10px;
+}
+
+.content ol {
+  padding: 0 0 0 35px;
+  margin: 0;
+}
+
+.content ol li {
+  margin: 0;
+  padding: 0;
+}
+
+.comment ul, .comment li {
+  display: inline;
+  list-style-type: none;
+  list-style-image: none;
+}
+
+#sidebar ul, #sidebar ul ol {
+  margin: 0;
+  padding: 0;
+}
+
+#sidebar ul li {
+  list-style-type: none;
+  list-style-image: none;
+  margin-bottom: 15px;
+}
+
+#sidebar ul p, #sidebar ul select {
+  margin: 5px 0 8px;
+}
+
+#sidebar ul ul, #sidebar ul ol {
+  margin: 5px 0 0 10px;
+}
+
+#sidebar ul ul ul, #sidebar ul ol {
+  margin: 0 0 0 10px;
+}
+
+ol li, #sidebar ul ol li {
+  list-style: decimal outside;
+}
+
+#sidebar ul ul li, #sidebar ul ol li {
+  margin: 3px 0 0;
+  padding: 0;
+}
+
+
+/* =====  Tables  ===== */
+
+table {
+  border: 1px solid black;
+  border-collapse: collapse;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+th, td {
+  border: 1px solid black;
+  padding: 5px;
+}
+
+
+/* =====  Misc  ===== */
+
+acronym, abbr, span.caps
+{
+  font-size: 0.9em;
+  letter-spacing: .07em;
+  cursor: help;
+}
+
+acronym, abbr {
+  border-bottom: 1px dashed #666;
+}
+
+blockquote {
+  margin: 15px 30px 0 10px;
+  padding-left: 20px;
+}
+
+blockquote cite {
+  margin: 5px 0 0;
+  display: block;
+}
+
+.center {
+  text-align: center;
+}
+
+a img {
+  border: none;
+}
+
+code {
+  font-family: 'Courier New', Courier, Fixed, Monospace;
+}
+
+pre {
+  margin: 10px 20px 10px 20px;
+  padding: 5px;
+  text-align: left;
+  font-size: 10pt;
+  font-family: 'Courier New', Courier, Fixed, Monospace;
+  background-color: #eee;
+  border: 1px solid #868fa0;
+}
+

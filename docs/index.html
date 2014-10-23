@@ -4,7 +4,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
 
 <!-- PL/Lua home -->
-<!-- $Id: index.html,v 1.4 2008/03/30 03:46:22 carvalho Exp $ -->
+<!-- $Id: index.html,v 1.4 2008-03-30 03:45:23 carvalho Exp $ -->
 
 <head>
 	<title>PL/Lua documentation</title>
@@ -221,12 +221,15 @@ returned by <code>func</code> is converted to a datum of type
 <p>The function body is composed as below to become a typical Lua chunk:</p>
 
 <pre>
-local <em>upvalue</em>, <strong>func</strong>
+local <em>_U</em>, <strong>func</strong> -- _U is upvalue
 <strong>func</strong> = function(<em>argnames</em>)
   <em>-- Lua function body</em>
 end
 return <strong>func</strong>
 </pre>
+
+<p>Note the <em>upvalue</em> <code>_U</code> that can be later declared in the
+function body (see examples below.)</p>
 
 <p>If any of the arguments provided to <code>create function</code> is not
 named then <code>argnames</code> gets substituted to <code>...</code>, that
@@ -262,26 +265,26 @@ $$ LANGUAGE pllua;
 </pre>
 
 <p>Moreover, as can be seen in the composition of <code>func</code> above,
-PL/Lua functions are actually <em>closures</em> on
-<code><em>upvalue</em></code>. The user can think of <code>upvalue</code> as
+PL/Lua functions are actually <em>closures</em> on the upvalue
+<code><em>_U</em></code>. The user can think of <code>_U</code> as
 local cache to <code>func</code> that could &mdash; and should! &mdash; be
 used instead of the global state to store values. Quick example:</p> 
 
 <pre>
 CREATE FUNCTION counter() RETURNS int AS $$
   while true do
-    upvalue = upvalue + 1
-    coroutine.yield(upvalue)
+    _U = _U + 1
+    coroutine.yield(_U)
   end
 end
 do
-  upvalue = 0 <em>-- counter</em>
+  _U = 0 <em>-- counter</em>
   counter = coroutine.wrap(counter)
 $$ LANGUAGE pllua;
 </pre>
 
 <p>Function <code>counter</code> is similar to an iterator, returning
-consecutive integers everytime it is called, starting at one. Note that we
+consecutive integers every time it is called, starting at one. Note that we
 need to add <code>end</code> to finish the function definition body and
 <code>do</code> to start a new block since the process of function composition
 always appends an <code>end</code>. It is important to observe that what
@@ -334,16 +337,16 @@ from <a href="http://www.lua.org/pil"><em>Programming in Lua</em></a>:</p>
 
 <pre>
 CREATE FUNCTION perm (a text[]) RETURNS SETOF text[] AS $$
-  upvalue(a, #a)
+  _U(a, #a)
 end
 do
-  upvalue = function (a, n) <em>-- permgen in PiL</em>
+  _U = function (a, n) <em>-- permgen in PiL</em>
     if n == 0 then
       coroutine.yield(a) <em>-- return next SRF row</em>
     else
       for i = 1, n do
         a[n], a[i] = a[i], a[n] <em>-- i-th element as last one</em>
-        upvalue(a, n - 1) <em>-- recurse on head</em>
+        _U(a, n - 1) <em>-- recurse on head</em>
         a[n], a[i] = a[i], a[n] <em>-- restore i-th element</em>
       end
     end
@@ -375,40 +378,41 @@ CREATE FUNCTION setcounter(c integer) RETURNS void AS $$
 $$ LANGUAGE pllua;
 </pre>
 
+
 <h3>Examples</h3>
 <p>Let's revisit our (rather inefficient) recursive Fibonacci function
 <code>fib</code>. A better version uses <em>tail recursion</em>:</p>
 
 <pre>
 CREATE FUNCTION fibt(n integer) RETURNS integer AS $$
-  return upvalue(n, 0, 1)
+  return _U(n, 0, 1)
 end
-upvalue = function(n, a, b) -- tail recursive
+_U = function(n, a, b) -- tail recursive
   if n &lt; 1 then
     return b
   else
-    return upvalue(n - 1, b, a + b)
+    return _U(n - 1, b, a + b)
   end
 $$ LANGUAGE pllua;
 </pre>
 
-<p>We can also use <code>upvalue</code> as a cache to store previous elements
-in the sequence and obtain a <em>memoized</em> version:</p>
+<p>We can also use the upvalue <code>_U</code> as a cache to store previous
+elements in the sequence and obtain a <em>memoized</em> version:</p>
 
 <pre>
 CREATE FUNCTION fibm(n integer) RETURNS integer AS $$
   if n &lt; 3 then
     return n
   else
-    local v = upvalue[n]
+    local v = _U[n]
     if not v then
       v = fibm(n - 1) + fibm(n - 2)
-      upvalue[n] = v
+      _U[n] = v
     end
     return v
   end
 end
-do upvalue = {} -- memoize
+do _U = {} -- memoize
 $$ LANGUAGE pllua;
 </pre>
 
@@ -417,15 +421,41 @@ $$ LANGUAGE pllua;
 <pre>
 CREATE FUNCTION fibi() RETURNS integer AS $$
   while true do
-    upvalue.curr, upvalue.next = upvalue.next, upvalue.curr + upvalue.next
-    coroutine.yield(upvalue.curr)
+    _U.curr, _U.next = _U.next, _U.curr + _U.next
+    coroutine.yield(_U.curr)
   end
 end
 do
-  upvalue = {curr = 0, next = 1}
+  _U = {curr = 0, next = 1}
   fibi = coroutine.wrap(fibi)
 $$ LANGUAGE pllua;
 </pre>
+
+<h3>Anonymous blocks</h3>
+<p>Anonymous code blocks are also supported in PL/Lua. The following
+prototype</p>
+
+<pre>
+DO $$
+  <em>-- Lua chunk</em>
+$$ LANGUAGE [pllua | plluau];
+</pre>
+
+<p>compiles and executes the Lua chunk. Here are some examples:</p>
+
+<pre>
+DO $$ print(_VERSION) $$ LANGUAGE pllua;
+
+DO $$
+  local ffi = assert(require("ffi")); -- LuaJIT
+  ffi.cdef[[ double lgamma (double); ]]
+  mathx = ffi.load("m")
+$$ LANGUAGE plluau; -- note: untrusted due to "require"
+CREATE FUNCTION lfactorial (n int) RETURNS double precision AS $$
+  return mathx.lgamma(n + 1)
+$$ LANGUAGE plluau;
+</pre>
+
 
 <h2 id="database">Database Access</h2>
 <small>Server interface in PL/Lua</small>
@@ -492,7 +522,7 @@ plan with <code>plan:save</code> if we want to keep the plan for longer than
 the current transaction.</p>
 
 <h4 id="plan_execute">
-  <code>plan:execute(cmd, args, readonly [, count])</code>
+  <code>plan:execute(args, readonly [, count])</code>
 </h4>
 <p>Executes a previously prepared plan with parameters in table
 <code>args</code>. <code>readonly</code> and <code>count</code> have the same
@@ -572,11 +602,11 @@ backward.</p>
 CREATE TABLE sometable ( sid int, sname text, sdata text);
 
 CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
-  if upvalue == nil then -- plan not cached?
+  if _U == nil then -- plan not cached?
     local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname=$1"
-    upvalue = server.prepare(cmd, {"text"}):save()
+    _U = server.prepare(cmd, {"text"}):save()
   end
-  local c = upvalue:getcursor({i_name}, true) -- read-only
+  local c = _U:getcursor({i_name}, true) -- read-only
   while true do
     local r = c:fetch(1)
     if r == nil then break end
@@ -587,9 +617,9 @@ CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
 $$ LANGUAGE pllua;
 </pre>
 
-<p>This SRF works as a pipeline: it uses <code>upvalue</code> to store a saved
+<p>This SRF works as a pipeline: it uses <code>_U</code> to store a saved
 plan, while local variable <code>c</code> is a cursor that we use to fetch, at
-each loop iteration, a row from <code>upvalue</code> and then yield a new row.
+each loop iteration, a row from <code>_U</code> and then yield a new row.
 Note that local <code>r</code> is a tupletable and we need to access
 <code>r[1]</code>.</p>
 
@@ -597,11 +627,11 @@ Note that local <code>r</code> is a tupletable and we need to access
 
 <pre>
 CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
-  if upvalue == nil then -- plan not cached?
+  if _U == nil then -- plan not cached?
     local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname=$1"
-    upvalue = server.prepare(cmd, {"text"}):save()
+    _U = server.prepare(cmd, {"text"}):save()
   end
-  for r in upvalue:rows{i_name} do
+  for r in _U:rows{i_name} do
     coroutine.yield(r) -- yield tuple
   end
 $$ LANGUAGE pllua;
@@ -652,15 +682,15 @@ gets updated in the next query.</p>
 
 <p>In <code>preorder</code> we executed a query many times. For our postorder
 traversal below we prepare a plan, save it, and cache in a
-<code>upvalue</code> table. Instead of executing the plan, we get a cursor
+<code>_U</code> table. Instead of executing the plan, we get a cursor
 from it and fetch only one row, as before.</p>
 
 <pre>
 CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
-  local p = upvalue[t]
+  local p = _U[t]
   if p == nil then <em>-- plan not cached?</em>
     p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
-    upvalue[t] = p:save()
+    _U[t] = p:save()
   end
   local c = p:getcursor({s}, true) <em>-- read-only</em>
   local q = c:fetch(1) <em>-- one row</em>
@@ -672,7 +702,7 @@ CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
   end
   coroutine.yield(s)
 end
-do upvalue = {} <em>-- plan cache</em>
+do _U = {} <em>-- plan cache</em>
 $$ LANGUAGE pllua;
 </pre>
 
@@ -710,8 +740,8 @@ necessary information. The <code>trigger</code> table is described below.</p>
     <tr>
       <td><code>operation</code></td>
       <td>
-        <code>"insert"</code>, <code>"update"</code>, or
-        <code>"delete"</code> depending on trigger operation
+        <code>"insert"</code>, <code>"update"</code>, <code>"delete"</code>,
+        or <code>"truncate"</code> depending on<br /> trigger operation
       </td>
     </tr>
     <tr>
@@ -752,7 +782,7 @@ two previous outcomes is expected.</p>
 <p>Let's restrict row operations in our previous binary tree example: updates
 are not allowed, deletions are only possible on leaf parents, and insertions
 should not introduce cycles and occur only at leaves. We store closures in
-<code>upvalue</code> that have prepared plans as upvalues.</p>
+<code>_U</code> that have prepared plans as upvalues.</p>
 
 <pre>
 create function treetrigger() returns trigger as $$
@@ -762,14 +792,14 @@ create function treetrigger() returns trigger as $$
   elseif operation == "insert" then
     local id, lchild, rchild = row.id, row.lchild, row.rchild
     if lchild == rchild or id == lchild or id == rchild <em>-- avoid loops</em>
-        or (lchild ~= nil and upvalue.intree(lchild)) <em>-- avoid cycles</em>
-        or (rchild ~= nil and upvalue.intree(rchild))
-        or (upvalue.nonemptytree() and not upvalue.isleaf(id)) <em>-- not leaf?</em>
+        or (lchild ~= nil and _U.intree(lchild)) <em>-- avoid cycles</em>
+        or (rchild ~= nil and _U.intree(rchild))
+        or (_U.nonemptytree() and not _U.isleaf(id)) <em>-- not leaf?</em>
         then
       trigger.row = nil <em>-- skip operation</em>
     end
   else <em>-- operation == "delete"</em>
-    if not upvalue.isleafparent(row.id) then <em>-- not both leaf parent?</em>
+    if not _U.isleafparent(row.id) then <em>-- not both leaf parent?</em>
       trigger.row = nil
     end
   end
@@ -781,7 +811,7 @@ do
       return plan:execute({...}, true) ~= nil
     end
   end
-  upvalue = { <em>-- plan closures</em>
+  _U = { <em>-- plan closures</em>
     nonemptytree = getter("select * from tree"),
     intree = getter("select node from (select id as node from tree "
       .. "union select lchild from tree union select rchild from tree) as q "
@@ -808,16 +838,16 @@ create trigger tree_trigger before insert or update or delete on tree
 <small>How to obtain and install PL/Lua</small>
 <p>PL/Lua is distributed as a source package and can be obtained at
 <a href="http://pgfoundry.org/projects/pllua">PgFoundry</a>. Depending on how
-Lua 5.1 is installed in your system you might have to edit the Makefile. After
+Lua is installed in your system you might have to edit the Makefile. After
 that the source package is installed like any regular PostgreSQL module, that
 is, after downloading and unpacking, just run:</p>
 
 <pre>
 $ make &amp;&amp; sudo make install
-$ psql -f pllua.sql <em>&lt;database&gt;</em>
+$ psql -c "CREATE EXTENSION pllua" <em>mydb</em>
 </pre>
 
-<p>The SQL script <code>pllua.sql</code> installs both trusted and untrusted
+<p>The <code>pllua</code> extension installs both trusted and untrusted
 flavors of PL/Lua and creates the module table <code>pllua.init</code>.
 Alternatively, a systemwide installation though the PL template facility can
 be achieved with:</p>
@@ -866,7 +896,7 @@ SOFTWARE.</p>
 &nbsp; :: &nbsp;
 <a href="http://jigsaw.w3.org/css-validator/check/referer">Valid CSS</a>
 <br />
-Last modified: $Date: 2008/03/30 03:46:22 $, $Author: carvalho $.
+Last modified: $Date: 2008-03-30 03:45:23 $, $Author: carvalho $.
 </p>
 </div>
 

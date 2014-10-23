@@ -1,5 +1,6 @@
 \set ECHO none
-\i pllua.sql
+--\i pllua.sql
+CREATE EXTENSION pllua;
 \set ECHO all
 
 -- minimal function
@@ -31,37 +32,37 @@ SELECT fib(4);
 CREATE FUNCTION fibm(n integer) RETURNS integer AS $$
   if n < 3 then return n
   else
-    local v = upvalue[n]
+    local v = _U[n]
     if not v then
       v = fibm(n - 1) + fibm(n - 2)
-      upvalue[n] = v
+      _U[n] = v
     end
     return v
   end
 end
-do upvalue = {}
+do _U = {}
 $$ LANGUAGE pllua;
 SELECT fibm(4);
 
 -- tail recursive
 CREATE FUNCTION fibt(n integer) RETURNS integer AS $$
-  return upvalue(n, 0, 1)
+  return _U(n, 0, 1)
 end
-upvalue = function(n, a, b)
+_U = function(n, a, b)
   if n < 1 then return b
-  else return upvalue(n - 1, b, a + b) end
+  else return _U(n - 1, b, a + b) end
 $$ LANGUAGE pllua;
 SELECT fibt(4);
 
 -- iterator
 CREATE FUNCTION fibi() RETURNS integer AS $$
   while true do
-    upvalue.curr, upvalue.next = upvalue.next, upvalue.curr + upvalue.next
-    coroutine.yield(upvalue.curr)
+    _U.curr, _U.next = _U.next, _U.curr + _U.next
+    coroutine.yield(_U.curr)
   end
 end
 do
-  upvalue = {curr = 0, next = 1}
+  _U = {curr = 0, next = 1}
   fibi = coroutine.wrap(fibi)
 $$ LANGUAGE pllua;
 SELECT fibi(), fibi(), fibi(), fibi(), fibi();
@@ -70,12 +71,12 @@ SELECT fibi(), fibi(), fibi(), fibi(), fibi();
 -- upvalue
 CREATE FUNCTION counter() RETURNS int AS $$
   while true do
-    upvalue = upvalue + 1
-    coroutine.yield(upvalue)
+    _U = _U + 1
+    coroutine.yield(_U)
   end
 end
 do
-  upvalue = 0 -- counter
+  _U = 0 -- counter
   counter = coroutine.wrap(counter)
 $$ LANGUAGE pllua;
 SELECT counter();
@@ -101,16 +102,16 @@ SELECT makegreeting(greetingset, '%s, %s!') FROM
 
 -- more array, upvalue
 CREATE FUNCTION perm (a text[]) RETURNS SETOF text[] AS $$
-  upvalue(a, #a)
+  _U(a, #a)
 end
 do
-  upvalue = function (a, n) -- permgen in PiL
+  _U = function (a, n) -- permgen in PiL
     if n == 0 then
       coroutine.yield(a) -- return next SRF row
     else
       for i = 1, n do
         a[n], a[i] = a[i], a[n] -- i-th element as last one
-        upvalue(a, n - 1) -- recurse on head
+        _U(a, n - 1) -- recurse on head
         a[n], a[i] = a[i], a[n] -- restore i-th element
       end
     end
@@ -142,11 +143,11 @@ CREATE TABLE sometable ( sid int4, sname text, sdata text);
 INSERT INTO sometable VALUES (1, 'name', 'data');
 
 CREATE FUNCTION get_rows (i_name text) RETURNS SETOF sometable AS $$
-  if upvalue == nil then -- plan not cached?
+  if _U == nil then -- plan not cached?
     local cmd = "SELECT sid, sname, sdata FROM sometable WHERE sname = $1"
-    upvalue = server.prepare(cmd, {"text"}):save()
+    _U = server.prepare(cmd, {"text"}):save()
   end
-  local c = upvalue:getcursor({i_name}, true) -- read-only
+  local c = _U:getcursor({i_name}, true) -- read-only
   while true do
     local r = c:fetch(1)
     if r == nil then break end
@@ -184,10 +185,10 @@ $$ LANGUAGE pllua;
 SELECT * from preorder('tree', 1);
 
 CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
-  local p = upvalue[t]
+  local p = _U[t]
   if p == nil then -- plan not cached?
     p = server.prepare("select * from " .. t .. " where id=$1", {"int4"})
-    upvalue[t] = p:save()
+    _U[t] = p:save()
   end
   local c = p:getcursor({s}, true) -- read-only
   local q = c:fetch(1) -- one row
@@ -199,7 +200,7 @@ CREATE FUNCTION postorder (t text, s int) RETURNS SETOF int AS $$
   end
   coroutine.yield(s)
 end
-do upvalue = {} -- plan cache
+do _U = {} -- plan cache
 $$ LANGUAGE pllua;
 SELECT * FROM postorder('tree', 1);
 
@@ -212,14 +213,14 @@ CREATE FUNCTION treetrigger() RETURNS trigger AS $$
   elseif operation == "insert" then
     local id, lchild, rchild = row.id, row.lchild, row.rchild
     if lchild == rchild or id == lchild or id == rchild -- avoid loops
-        or (lchild ~= nil and upvalue.intree(lchild)) -- avoid cycles
-        or (rchild ~= nil and upvalue.intree(rchild))
-        or (upvalue.nonemptytree() and not upvalue.isleaf(id)) -- not leaf?
+        or (lchild ~= nil and _U.intree(lchild)) -- avoid cycles
+        or (rchild ~= nil and _U.intree(rchild))
+        or (_U.nonemptytree() and not _U.isleaf(id)) -- not leaf?
         then
       trigger.row = nil -- skip operation
     end
   else -- operation == "delete"
-    if not upvalue.isleafparent(row.id) then -- not both leaf parent?
+    if not _U.isleafparent(row.id) then -- not both leaf parent?
       trigger.row = nil
     end
   end
@@ -231,7 +232,7 @@ do
       return plan:execute({...}, true) ~= nil
     end
   end
-  upvalue = { -- plan closures
+  _U = { -- plan closures
     nonemptytree = getter("select * from tree"),
     intree = getter("select node from (select id as node from tree "
       .. "union select lchild from tree union select rchild from tree) as q "
@@ -289,9 +290,9 @@ SELECT echo_mytype((1::int2, 666.777, array[1.0, 2.0]) );
 
 -- body reload
 SELECT hello('PostgreSQL');
-CREATE OR REPLACE FUNCTION hello(xname text)
+CREATE OR REPLACE FUNCTION hello(name text)
 RETURNS text AS $$
-  return string.format("Bye, %s!", xname)
+  return string.format("Bye, %s!", name)
 $$ LANGUAGE pllua;
 SELECT hello('PostgreSQL');
 

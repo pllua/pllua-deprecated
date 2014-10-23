@@ -1,7 +1,7 @@
 /*
  * PL/Lua
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
- * Version: 0.3
+ * Version: 1.0
  * Please check copyright notice at the bottom of this file
  * $Id: pllua.h,v 1.17 2009/09/19 16:20:45 carvalho Exp $
  */
@@ -18,19 +18,30 @@
 #include <executor/spi.h>
 #include <nodes/makefuncs.h>
 #include <parser/parse_type.h>
+#include <utils/array.h>
+#include <utils/builtins.h>
+#include <utils/datum.h>
 #include <utils/lsyscache.h>
 #include <utils/memutils.h>
+#include <utils/rel.h>
 #include <utils/syscache.h>
 #include <utils/typcache.h>
-#include <utils/datum.h>
-#include <utils/builtins.h>
-#include <utils/array.h>
 /* Lua */
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
 
-#define PLLUA_VERSION "PL/Lua 0.3"
+#if LUA_VERSION_NUM <= 501
+#define lua_pushglobaltable(L) lua_pushvalue(L, LUA_GLOBALSINDEX)
+#define lua_setuservalue lua_setfenv
+#define lua_getuservalue lua_getfenv
+#define lua_rawlen lua_objlen
+#define luaP_register(L,l) luaL_register(L, NULL, (l))
+#else
+#define luaP_register(L,l) luaL_setfuncs(L, (l), 0)
+#endif
+
+#define PLLUA_VERSION "PL/Lua 1.0"
 
 typedef struct luaP_Buffer {
   int size;
@@ -46,6 +57,9 @@ lua_State *luaP_newstate (int trusted);
 void luaP_close (lua_State *L);
 Datum luaP_validator (lua_State *L, Oid oid);
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo);
+#if PG_VERSION_NUM >= 90000
+Datum luaP_inlinehandler (lua_State *L, const char *source);
+#endif
 /* general API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
 Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);

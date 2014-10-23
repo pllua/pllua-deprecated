@@ -2,11 +2,27 @@
  * plluaapi.c: PL/Lua API
  * Author: Luis Carvalho <lexcarvalho at gmail.com>
  * Please check copyright notice at the bottom of pllua.h
- * $Id: plluaapi.c,v 1.20 2009/09/19 16:56:38 carvalho Exp $
  */
 
 #include "pllua.h"
 #include "rowstamp.h"
+
+/*
+ * [[ Uses of REGISTRY ]]
+ * [general]
+ * REG[light(L)] = memcontext
+ * [type]
+ * REG[oid(type)] = typeinfo
+ * REG[PLLUA_TYPEINFO] = typeinfo_MT
+ * REG[PLLUA_DATUM] = datum_MT
+ * [trigger]
+ * REG[rel_id] = desc_table
+ * REG[relname] = rel_table
+ * [call handler]
+ * REG[light(info)] = func
+ * REG[oid(func)] = info
+ * REG[light(thread)] = thread
+ */
 
 /* extended function info */
 typedef struct luaP_Info {
@@ -42,7 +58,7 @@ typedef struct luaP_Datum {
 static const char PLLUA_TYPEINFO[] = "typeinfo";
 static const char PLLUA_DATUM[] = "datum";
 
-#define PLLUA_LOCALVAR "upvalue"
+#define PLLUA_LOCALVAR "_U"
 #define PLLUA_SHAREDVAR "shared"
 #define PLLUA_SPIVAR "server"
 #define PLLUA_TRIGGERVAR "trigger"
@@ -181,7 +197,11 @@ static int luaP_datumgc (lua_State *L) {
 
 static int luaP_datumsave (lua_State *L) {
   luaP_Datum *d = luaP_toudata(L, 1, PLLUA_DATUM);
-  if (d == NULL) luaL_typerror(L, 1, PLLUA_DATUM);
+  if (d == NULL) {
+    const char *msg = lua_pushfstring(L, "%s expected, got %s",
+        PLLUA_DATUM, luaL_typename(L, 1));
+    luaL_argerror(L, 1, msg);
+  }
   if (!d->ti->byval) { /* by reference? */
     Size l = datumGetSize(d->datum, false, d->ti->len);
     MemoryContext mcxt = luaP_getmemctxt(L);
@@ -213,6 +233,7 @@ static luaP_Datum *luaP_pushrawdatum (lua_State *L, Datum dat,
 
 static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   const char *relname;
+  lua_pushglobaltable(L);
   lua_pushstring(L, PLLUA_TRIGGERVAR);
   lua_newtable(L);
   /* when */
@@ -238,6 +259,10 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
     lua_pushstring(L, "update");
   else if (TRIGGER_FIRED_BY_DELETE(tdata->tg_event))
     lua_pushstring(L, "delete");
+#if PG_VERSION_NUM >= 80400
+  else if (TRIGGER_FIRED_BY_TRUNCATE(tdata->tg_event))
+    lua_pushstring(L, "truncate");
+#endif
   else
     elog(ERROR, "[pllua]: unknown trigger 'operation' event");
   lua_setfield(L, -2, "operation");
@@ -277,7 +302,9 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   /* trigger name */
   lua_pushstring(L, tdata->tg_trigger->tgname);
   lua_setfield(L, -2, "name");
-  lua_rawset(L, LUA_GLOBALSINDEX);
+  /* done setting up trigger; now set global */
+  lua_rawset(L, -3); /* _G[PLLUA_TRIGGERVAR] = table */
+  lua_pop(L, 1); /* _G */
 }
 
 static Datum luaP_gettriggerresult (lua_State *L) {
@@ -290,9 +317,11 @@ static Datum luaP_gettriggerresult (lua_State *L) {
 }
 
 static void luaP_cleantrigger (lua_State *L) {
+  lua_pushglobaltable(L);
   lua_pushstring(L, PLLUA_TRIGGERVAR);
   lua_pushnil(L);
-  lua_rawset(L, LUA_GLOBALSINDEX);
+  lua_rawset(L, -3);
+  lua_pop(L, 1); /* _G */
 }
 
 /* ======= luaP_newstate: create a new Lua VM ======= */
@@ -320,12 +349,17 @@ static int luaP_modinit (lua_State *L) {
           /* push module name */
           lua_pushstring(L, text2string(heap_getattr(SPI_tuptable->vals[i],
               1, SPI_tuptable->tupdesc, &isnull))); /* first column */
-          lua_getfield(L, LUA_GLOBALSINDEX, "require");
+          lua_getglobal(L, "require");
           lua_pushvalue(L, -2); /* module name */
           status = lua_pcall(L, 1, 1, 0);
           if (status) break; /* error? */
-          if (!lua_isnil(L, -1)) /* make sure global table is set? */
-            lua_rawset(L, LUA_GLOBALSINDEX);
+          if (!lua_isnil(L, -1)) { /* make sure global table is set? */
+            lua_pushglobaltable(L);
+            lua_pushvalue(L, -3); /* key */
+            lua_pushvalue(L, -3); /* value */
+            lua_rawset(L, -3); /* _G[key] = value */
+            lua_pop(L, 1); /* _G */
+          }
           else
             lua_pop(L, 1); /* module name */
         }
@@ -348,7 +382,7 @@ static int luaP_setshared (lua_State *L) {
   lua_settop(L, 2); /* key, value */
   lua_pushvalue(L, -1);
   lua_insert(L, -3);
-  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  lua_pushglobaltable(L);
   lua_insert(L, -3);
   lua_rawset(L, -3);
   lua_pop(L, 1); /* global table */
@@ -449,7 +483,13 @@ lua_State *luaP_newstate (int trusted) {
   /* core libs */
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
+#if LUA_VERSION_NUM <= 501
       {"", luaopen_base},
+#else
+      {"_G", luaopen_base},
+      {LUA_COLIBNAME, luaopen_coroutine},
+      {LUA_BITLIBNAME, luaopen_bit32},
+#endif
       {LUA_TABLIBNAME, luaopen_table},
       {LUA_STRLIBNAME, luaopen_string},
       {LUA_MATHLIBNAME, luaopen_math},
@@ -461,9 +501,14 @@ lua_State *luaP_newstate (int trusted) {
     const luaL_Reg *reg = luaP_trusted_libs;
     const char **s = os_funcs;
     for (; reg->func; reg++) {
+#if LUA_VERSION_NUM <= 501
       lua_pushcfunction(L, reg->func);
       lua_pushstring(L, reg->name);
       lua_call(L, 1, 0);
+#else
+      luaL_requiref(L, reg->name, reg->func, 1); /* set in global table */
+      lua_pop(L, 1); /* remove lib */
+#endif
     }
     /* restricted os lib */
     lua_getglobal(L, LUA_OSLIBNAME);
@@ -473,7 +518,7 @@ lua_State *luaP_newstate (int trusted) {
       lua_setfield(L, -2, *s);
     }
     lua_setglobal(L, LUA_OSLIBNAME);
-    lua_pop(L, 2);
+    lua_pop(L, 1);
   }
   else
     luaL_openlibs(L);
@@ -499,23 +544,23 @@ lua_State *luaP_newstate (int trusted) {
   if (status != 0) /* SPI or module loading error? */
     elog(ERROR, "%s", lua_tostring(L, -1));
   /* set alias for _G */
-  lua_pushvalue(L, LUA_GLOBALSINDEX);
+  lua_pushglobaltable(L);
   lua_setglobal(L, PLLUA_SHAREDVAR); /* _G.shared = _G */
   /* globals */
-  lua_pushvalue(L, LUA_GLOBALSINDEX);
-  luaL_register(L, NULL, luaP_funcs);
+  lua_pushglobaltable(L);
+  luaP_register(L, luaP_funcs);
   lua_pop(L, 1);
   /* SPI */
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
   if (trusted) {
-    const char *package_keys[] = {
+    const char *package_keys[] = { /* to be removed */
       "preload", "loadlib", "loaders", "seeall", NULL};
-    const char *global_keys[] = {
-      "require", "module", "dofile", "load", "loadfile", "loadstring", NULL};
+    const char *global_keys[] = { /* to be removed */
+      "require", "module", "dofile", "loadfile", NULL};
     const char **s;
     /* clean package module */
-    lua_getfield(L, LUA_GLOBALSINDEX, "package");
+    lua_getglobal(L, "package");
     for (s = package_keys; *s; s++) {
       lua_pushnil(L);
       lua_setfield(L, -2, *s);
@@ -524,15 +569,17 @@ lua_State *luaP_newstate (int trusted) {
     /* clean global table */
     for (s = global_keys; *s; s++) {
       lua_pushnil(L);
-      lua_setfield(L, LUA_GLOBALSINDEX, *s);
+      lua_setglobal(L, *s);
     }
     /* set _G as read-only */
+    lua_pushglobaltable(L);
     lua_createtable(L, 0, 1);
     lua_pushcfunction(L, luaP_globalnewindex);
     lua_setfield(L, -2, "__newindex");
     lua_pushvalue(L, -1); /* metatable */
     lua_setfield(L, -2, "__metatable");
-    lua_setmetatable(L, LUA_GLOBALSINDEX);
+    lua_setmetatable(L, -2);
+    lua_pop(L, 1); /* _G */
   }
   return L;
 }
@@ -663,6 +710,7 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   }
 }
 
+/* leaves function info (fi) for oid in stack */
 static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
   luaP_Info *fi = NULL;
   HeapTuple proc;
@@ -707,7 +755,7 @@ static void luaP_pusharray (lua_State *L, char **p, int ndims,
         *p = att_addlength_pointer(*p, ti->len, *p);
         *p = (char *) att_align_nominal(*p, ti->align);
       }
-      if (*bitmap) {
+      if (*bitmap) { /* advance bitmap pointer? */
         *bitmask <<= 1;
         if (*bitmask == 0x100) {
           (*bitmap)++;
@@ -951,18 +999,12 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
       case BOOLOID:
         dat = BoolGetDatum(lua_toboolean(L, -1));
         break;
-      case FLOAT4OID: { /* not by value */
-        float4 *x = (float4 *) SPI_palloc(sizeof(float4));
-        *x = lua_tonumber(L, -1);
-        dat = PointerGetDatum(x);
+      case FLOAT4OID:
+        dat = Float4GetDatum((float4) lua_tonumber(L, -1));
         break;
-      }
-      case FLOAT8OID: { /* not by value */
-        float8 *x = (float8 *) SPI_palloc(sizeof(float8));
-        *x = lua_tonumber(L, -1);
-        dat = PointerGetDatum(x);
+      case FLOAT8OID:
+        dat = Float8GetDatum((float8) lua_tonumber(L, -1));
         break;
-      }
       case INT2OID:
         dat = Int16GetDatum(lua_tointeger(L, -1));
         break;
@@ -1098,12 +1140,19 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
 static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
     Oid type) {
   Datum dat = luaP_todatum(L, type, 0, &fcinfo->isnull);
-  lua_pop(L, 1);
+  lua_settop(L, 0);
   return dat;
 }
 
 
 /* ======= luaP_callhandler ======= */
+
+static void luaP_cleanthread (lua_State *L, lua_State **thread) {
+  lua_pushlightuserdata(L, (void *) *thread);
+  lua_pushnil(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  *thread = NULL;
+}
 
 Datum luaP_validator (lua_State *L, Oid oid) {
   if (SPI_connect() != SPI_OK_CONNECT)
@@ -1129,14 +1178,14 @@ Datum luaP_validator (lua_State *L, Oid oid) {
 
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
   Datum retval = 0;
-  luaP_Info *fi = NULL;
+  luaP_Info *fi;
   bool istrigger;
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
+  istrigger = CALLED_AS_TRIGGER(fcinfo);
+  fi = luaP_pushfunction(L, (int) fcinfo->flinfo->fn_oid);
   PG_TRY();
   {
-    istrigger = CALLED_AS_TRIGGER(fcinfo);
-    fi = luaP_pushfunction(L, (int) fcinfo->flinfo->fn_oid);
     if ((fi->result == TRIGGEROID && !istrigger)
         || (fi->result != TRIGGEROID && istrigger))
       ereport(ERROR,
@@ -1149,8 +1198,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
       nargs = trigdata->tg_trigger->tgnargs;
       for (i = 0; i < nargs; i++) /* push args */
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
-      if (lua_pcall(L, nargs, 0, 0))
-        luaP_error(L, "runtime");
+      if (lua_pcall(L, nargs, 0, 0)) luaP_error(L, "runtime");
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
           && TRIGGER_FIRED_BEFORE(trigdata->tg_event)) /* return? */
         retval = luaP_gettriggerresult(L);
@@ -1158,7 +1206,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     }
     else { /* called as function */
       if (fi->result_isset) { /* SETOF? */
-        int status;
+        int status, hasresult;
         ReturnSetInfo *rsi = (ReturnSetInfo *) fcinfo->resultinfo;
         if (fi->L == NULL) { /* first call? */
           if (!rsi || !IsA(rsi, ReturnSetInfo)
@@ -1176,19 +1224,21 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         }
         lua_xmove(L, fi->L, 1); /* function */
         luaP_pushargs(fi->L, fcinfo, fi);
+#if LUA_VERSION_NUM <= 501
         status = lua_resume(fi->L, fcinfo->nargs);
-        if (status == LUA_YIELD && !lua_isnil(fi->L, -1)) {
+#else
+        status = lua_resume(fi->L, fi->L, fcinfo->nargs);
+#endif
+        hasresult = !lua_isnoneornil(fi->L, 1);
+        if (status == LUA_YIELD && hasresult) {
           rsi->isDone = ExprMultipleResult; /* SRF: next */
           retval = luaP_getresult(fi->L, fcinfo, fi->result);
         }
-        else if (status == 0 || lua_isnil(fi->L, -1)) { /* last call? */
+        else if (status == 0 || !hasresult) { /* last call? */
           rsi->isDone = ExprEndResult; /* SRF: done */
-          lua_pushlightuserdata(L, (void *) fi->L);
-          lua_pushnil(L);
-          lua_rawset(L, LUA_REGISTRYINDEX);
-          fi->L = NULL;
           fcinfo->isnull = true;
           retval = (Datum) 0;
+          luaP_cleanthread(L, &fi->L);
         }
         else luaP_error(fi->L, "runtime");
       }
@@ -1199,19 +1249,15 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         retval = luaP_getresult(L, fcinfo, fi->result);
       }
     }
+    /* stack should be clean here: lua_gettop(L) == 0 */
   }
   PG_CATCH();
   {
     if (L != NULL) {
-      lua_settop(L, 0); /* clear Lua stack */
-      if (fi != NULL && fi->result_isset
-          && fi->L != NULL) { /* clean thread? */
-        lua_pushlightuserdata(L, (void *) fi->L);
-        lua_pushnil(L);
-        lua_rawset(L, LUA_REGISTRYINDEX);
-        fi->L = NULL;
-      }
       luaP_cleantrigger(L);
+      if (fi->result_isset && fi->L != NULL) /* clean thread? */
+        luaP_cleanthread(L, &fi->L);
+      lua_settop(L, 0); /* clear Lua stack */
     }
     fcinfo->isnull = true;
     retval = (Datum) 0;
@@ -1222,4 +1268,28 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   return retval;
 }
+
+#if PG_VERSION_NUM >= 90000
+/* ======= luaP_inlinehandler ======= */
+
+Datum luaP_inlinehandler (lua_State *L, const char *source) {
+  if (SPI_connect() != SPI_OK_CONNECT)
+    elog(ERROR, "[pllua]: could not connect to SPI manager");
+  PG_TRY();
+  {
+    if (luaL_loadbuffer(L, source, strlen(source), PLLUA_CHUNKNAME))
+      luaP_error(L, "compile");
+    if (lua_pcall(L, 0, 0, 0)) luaP_error(L, "runtime");
+  }
+  PG_CATCH();
+  {
+    if (L != NULL) lua_settop(L, 0); /* clear Lua stack */
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
+  if (SPI_finish() != SPI_OK_FINISH)
+    elog(ERROR, "[pllua]: could not disconnect from SPI manager");
+  PG_RETURN_VOID();
+}
+#endif
 

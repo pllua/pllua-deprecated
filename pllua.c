@@ -17,6 +17,10 @@ Datum pllua_validator(PG_FUNCTION_ARGS);
 Datum pllua_call_handler(PG_FUNCTION_ARGS);
 Datum plluau_validator(PG_FUNCTION_ARGS);
 Datum plluau_call_handler(PG_FUNCTION_ARGS);
+#if PG_VERSION_NUM >= 90000
+Datum pllua_inline_handler(PG_FUNCTION_ARGS);
+Datum plluau_inline_handler(PG_FUNCTION_ARGS);
+#endif
 
 PG_FUNCTION_INFO_V1(_PG_init);
 Datum _PG_init(PG_FUNCTION_ARGS) {
@@ -51,4 +55,19 @@ PG_FUNCTION_INFO_V1(pllua_call_handler);
 Datum pllua_call_handler(PG_FUNCTION_ARGS) {
   return luaP_callhandler(L[1], fcinfo);
 }
+
+#if PG_VERSION_NUM >= 90000
+#define CODEBLOCK \
+  ((InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0)))->source_text
+
+PG_FUNCTION_INFO_V1(plluau_inline_handler);
+Datum plluau_inline_handler(PG_FUNCTION_ARGS) {
+  return luaP_inlinehandler(L[0], CODEBLOCK);
+}
+
+PG_FUNCTION_INFO_V1(pllua_inline_handler);
+Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
+  return luaP_inlinehandler(L[1], CODEBLOCK);
+}
+#endif
 
