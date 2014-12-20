@@ -578,6 +578,7 @@ How to obtain and install PL/Lua
 PL/Lua is distributed as a source package and can be obtained at [PgFoundry][22]. Depending on how Lua is installed in your system you might have to edit the Makefile. After that the source package is installed like any regular PostgreSQL module, that is, after downloading and unpacking, just run:
 
 ```
+    $ export PG_CONFIG='/usr/pgsql-9.4/bin/pg_config' # specifiy where pg_config is located
     $ make && sudo make install
     $ psql -c "CREATE EXTENSION pllua" mydb
 ```
