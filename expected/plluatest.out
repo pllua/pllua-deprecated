@@ -233,7 +233,6 @@ SELECT * FROM get_rows('name');
 (1 row)
 
 CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
-NOTICE:  CREATE TABLE / PRIMARY KEY will create implicit index "tree_pkey" for table "tree"
 CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
   local p = server.prepare("insert into " .. t .. " values($1, $2, $3)",
     {"int4", "int4", "int4"})

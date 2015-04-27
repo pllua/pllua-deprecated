@@ -233,6 +233,8 @@ static luaP_Datum *luaP_pushrawdatum (lua_State *L, Datum dat,
 
 static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   const char *relname;
+  char *namespace;
+
   lua_pushglobaltable(L);
   lua_pushstring(L, PLLUA_TRIGGERVAR);
   lua_newtable(L);
@@ -266,23 +268,26 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   else
     elog(ERROR, "[pllua]: unknown trigger 'operation' event");
   lua_setfield(L, -2, "operation");
-  /* relation (name) */
+
+  /* relation */
   relname = NameStr(tdata->tg_relation->rd_rel->relname);
-  lua_getfield(L, LUA_REGISTRYINDEX, relname);
-  if (lua_isnil(L, -1)) { /* not cached? */
-    lua_pop(L, 1);
-    lua_createtable(L, 0, 2);
-    lua_pushstring(L, relname);
-    lua_setfield(L, -2, "name");
-    luaP_pushdesctable(L, tdata->tg_relation->rd_att);
-    lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
-    lua_pushvalue(L, -2); /* attribute table */
-    lua_rawset(L, LUA_REGISTRYINDEX); /* cache desc */
-    lua_setfield(L, -2, "attributes");
-    lua_pushvalue(L, -1);
-    lua_setfield(L, LUA_REGISTRYINDEX, relname); /* cache relation */
-  }
+  namespace = get_namespace_name(tdata->tg_relation->rd_rel->relnamespace);
+
+  lua_createtable(L, 0, 3);
+  lua_pushstring(L, relname);
+  lua_setfield(L, -2, "name");
+  luaP_pushdesctable(L, tdata->tg_relation->rd_att);
+  lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
+  lua_pushvalue(L, -2); /* attribute table */
+  lua_rawset(L, LUA_REGISTRYINDEX); /* cache desc */
+  lua_setfield(L, -2, "attributes");
+  lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
+  lua_setfield(L, -2, "oid");
+  lua_pushstring(L, namespace);
+  lua_setfield(L, -2, "namespace"); 
+
   lua_setfield(L, -2, "relation");
+
   /* row */
   if (TRIGGER_FIRED_FOR_ROW(tdata->tg_event)) {
     if (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) {

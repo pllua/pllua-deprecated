@@ -295,4 +295,3 @@ RETURNS text AS $$
   return string.format("Bye, %s!", name)
 $$ LANGUAGE pllua;
 SELECT hello('PostgreSQL');
-

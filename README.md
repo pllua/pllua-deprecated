@@ -499,7 +499,7 @@ In `preorder` we executed a query many times. For our postorder traversal below 
 
 Triggers in PL/Lua
 
-Triggers can be defined in PL/Lua as usual by just creating a function returning `trigger`. When a function returns a trigger, PL/Lua creates a (global) table _`trigger`_ containing all necessary information. The `trigger` table is described below.
+Triggers can be defined in PL/Lua as usual by just creating a function returning `trigger`. When a function returns a trigger, PL/Lua creates a (global) table `trigger` containing all necessary information. The `trigger` table is described below.
 
 
 |  Key |  Value |
@@ -507,14 +507,30 @@ Triggers can be defined in PL/Lua as usual by just creating a function returning
 |  `name` |  trigger name |
 |  `when` |  `"before"` if trigger fired before or `"after"` if trigger fired after  |
 |  `level` |  `"row"` if row-level trigger or `"statement"` if statement-level trigger  |
-|  `operation` |  `"insert"`, `"update"`, `"delete"`, or `"truncate"` depending on
-trigger operation  |
-|  `relation` |  Lua table describing the relation with keys: `name` is relation name (string)
-and `attributes` is a table with relation attributes as string keys  |
-|  `row` |  Tuple representing the row-level trigger's target: in update operations
-holds the _new_ row, otherwise holds the _old_ row. `row` is `nil` in
-statement-level triggers.  |
+|  `operation` |  `"insert"`, `"update"`, `"delete"`, or `"truncate"` depending on trigger operation  |
+|  `relation` |  Lua table describing the relation with keys: `name` is relation name (string), `namespace` is the relation schema name (string), `attributes` is a table with relation attributes as string keys  |
+|  `row` |  Tuple representing the row-level trigger's target: in update operations holds the _new_ row, otherwise holds the _old_ row. `row` is `nil` in statement-level triggers.  |
 |  `old` |  Tuple representing the old row in an update before row-level operation.  |
+
+Example content of a `trigger` table after an update operation :
+```lua
+trigger = {
+   ["old"] = "tuple: 0xd084d8",
+   ["name"] = "trigger_name",
+   ["when"] = "after",
+   ["operation"] = "update",
+   ["level"] = "row",
+   ["row"] = "tuple: 0xd244f8",
+   ["relation"] = {
+      ["namespace"] = "public",
+      ["attributes"] = {
+         ["test_column"] = 0,
+      },
+      ["name"] = "table_name",
+      ["oid"] = 59059
+   }
+}
+```
 
 Trigger functions in PL/Lua don't return; instead, only for row-level-before operations, the tuple in `trigger.row` is read for the actual returned value. The returned tuple has then the same effect for general triggers: if `nil` the operation for the current row is skipped, a modified tuple will be inserted or updated for insert and update operations, and `trigger.row` should not be modified if none of the two previous outcomes is expected.
 
@@ -613,4 +629,4 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 [16]: http://www.lua.org/pil
 [22]: http://pgfoundry.org/projects/pllua
 
-  
+
