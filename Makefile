@@ -31,7 +31,11 @@ DATA = pllua--1.0.sql
 #DATA_built = pllua.sql
 
 REGRESS = plluatest
-OBJS = pllua.o plluaapi.o plluaspi.o
+OBJS = \
+pllua.o \
+pllua_debug.o \
+plluaapi.o \
+plluaspi.o
 PG_CPPFLAGS = $(LUAINC)
 SHLIB_LINK = $(LUALIB)
 
@@ -39,4 +43,5 @@ SHLIB_LINK = $(LUALIB)
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+#override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS) -DPLLUA_DEBUG
 

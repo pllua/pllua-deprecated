@@ -85,10 +85,17 @@ static const char PLLUA_DATUM[] = "datum";
 #define resulterror(type) \
   elog(ERROR, "[pllua]: type '%s' (%d) not supported as result", \
       format_type_be(type), (type))
+#if defined(PLLUA_DEBUG)
+#define luaP_error(L, tag) \
+        ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
+             errmsg("[pllua]: error: %s", tag), \
+             errdetail("%s", lua_tostring((L), -1))))
+#else
 #define luaP_error(L, tag) \
         ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
              errmsg("[pllua]: " tag " error"), \
              errdetail("%s", lua_tostring((L), -1))))
+#endif
 
 #define datum2string(d, f) \
   DatumGetCString(DirectFunctionCall1((f), (d)))
@@ -115,15 +122,7 @@ static Datum datumcopy (Datum dat, luaP_Typeinfo *ti) {
   return dat;
 }
 
-/* get MemoryContext for state L */
-static MemoryContext luaP_getmemctxt (lua_State *L) {
-  MemoryContext mcxt;
-  lua_pushlightuserdata(L, (void *) L);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  mcxt = (MemoryContext) lua_touserdata(L, -1);
-  lua_pop(L, 1);
-  return mcxt;
-}
+
 
 
 /* ======= Type ======= */
@@ -292,15 +291,15 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   if (TRIGGER_FIRED_FOR_ROW(tdata->tg_event)) {
     if (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) {
       luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_newtuple,
-          tdata->tg_relation->rd_id, 0);
+          tdata->tg_relation->rd_id, 0,0);
       lua_setfield(L, -2, "row"); /* new row */
       luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
-          tdata->tg_relation->rd_id, 1);
+          tdata->tg_relation->rd_id, 1,0);
       lua_setfield(L, -2, "old"); /* old row */
     }
     else { /* insert or delete */
       luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
-          tdata->tg_relation->rd_id, 0);
+          tdata->tg_relation->rd_id, 0,0);
       lua_setfield(L, -2, "row"); /* old row */
     }
   }
@@ -425,9 +424,9 @@ static int luaP_info (lua_State *L) {
 }
 
 static int luaP_log (lua_State *L) {
-  luaL_checkstring(L, 1);
-  ereport(LOG, (errmsg("%s", lua_tostring(L, 1))));
-  return 0;
+    luaL_checkstring(L, 1);
+    ereport(LOG, (errmsg("%s", lua_tostring(L, 1))));
+    return 0;
 }
 
 static int luaP_notice (lua_State *L) {
@@ -555,6 +554,11 @@ lua_State *luaP_newstate (int trusted) {
   lua_pushglobaltable(L);
   luaP_register(L, luaP_funcs);
   lua_pop(L, 1);
+  //----------------------------------
+  lua_pushlightuserdata(L, p_tuple_info);
+  lua_newtable(L);
+  lua_settable(L, LUA_REGISTRYINDEX);
+  //----------------------------------
   /* SPI */
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
@@ -1203,7 +1207,13 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
       nargs = trigdata->tg_trigger->tgnargs;
       for (i = 0; i < nargs; i++) /* push args */
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
-      if (lua_pcall(L, nargs, 0, 0)) luaP_error(L, "runtime");
+      if (lua_pcall(L, nargs, 0, 0)) {
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+      }
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
           && TRIGGER_FIRED_BEFORE(trigdata->tg_event)) /* return? */
         retval = luaP_gettriggerresult(L);
@@ -1245,12 +1255,23 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
           retval = (Datum) 0;
           luaP_cleanthread(L, &fi->L);
         }
-        else luaP_error(fi->L, "runtime");
+        else {
+#if defined(PLLUA_DEBUG)
+        luaP_error(fi->L, getLINE());
+#else
+        luaP_error(fi->L, "runtime");
+#endif
+    }
       }
       else {
         luaP_pushargs(L, fcinfo, fi);
-        if (lua_pcall(L, fcinfo->nargs, 1, 0))
-          luaP_error(L, "runtime");
+        if (lua_pcall(L, fcinfo->nargs, 1, 0)){
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+    }
         retval = luaP_getresult(L, fcinfo, fi->result);
       }
     }
@@ -1284,7 +1305,13 @@ Datum luaP_inlinehandler (lua_State *L, const char *source) {
   {
     if (luaL_loadbuffer(L, source, strlen(source), PLLUA_CHUNKNAME))
       luaP_error(L, "compile");
-    if (lua_pcall(L, 0, 0, 0)) luaP_error(L, "runtime");
+    if (lua_pcall(L, 0, 0, 0)) {
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+    }
   }
   PG_CATCH();
   {

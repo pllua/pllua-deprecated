@@ -46,6 +46,31 @@
 
 #define PLLUA_VERSION "PL/Lua 1.0"
 
+#if defined(PLLUA_DEBUG)
+#include "pllua_debug.h"
+#define BEGINLUA int ____stk=lua_gettop(L)
+#define ENDLUA ____stk =lua_gettop(L)-____stk; if(0!=____stk) ereport(INFO, (errmsg("stk %s>%i",AT,____stk)))
+#define ENDLUAV(v) ____stk =(lua_gettop(L)-____stk-v); if(0!=____stk) ereport(INFO, (errmsg("stk %s>%i",AT,____stk)))
+#else
+#define BEGINLUA
+#define ENDLUA
+#define ENDLUAV(v)
+#endif
+
+/* get MemoryContext for state L */
+MemoryContext luaP_getmemctxt (lua_State *L);
+
+#define MTOLUA(state) MemoryContext ___mcxt = luaP_getmemctxt(state); \
+MemoryContext ___m = MemoryContextSwitchTo(___mcxt);
+
+#define MTOPG MemoryContextSwitchTo(___m);
+
+
+void *p_tuple_info();
+
+
+
+
 typedef struct luaP_Buffer {
   int size;
   Datum *value;
@@ -66,8 +91,9 @@ Datum luaP_inlinehandler (lua_State *L, const char *source);
 /* general API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
 Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
+
 void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
-    Oid relid, int readonly);
+    Oid relid, int readonly, unsigned int tupleIdxSeq);
 HeapTuple luaP_totuple (lua_State *L);
 HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc);
 /* SPI */
