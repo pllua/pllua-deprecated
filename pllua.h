@@ -44,6 +44,13 @@
 #define luaP_register(L,l) luaL_setfuncs(L, (l), 0)
 #endif
 
+#if !defined LUA_VERSION_NUM || LUA_VERSION_NUM==501
+/*
+** Adapted from Lua 5.2.0
+*/
+void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
+#endif
+
 #define PLLUA_VERSION "PL/Lua 1.0"
 
 #if defined(PLLUA_DEBUG)

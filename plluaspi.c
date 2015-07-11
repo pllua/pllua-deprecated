@@ -755,39 +755,41 @@ Oid luaP_gettypeoid (const char *typename) {
 }
 
 static int luaP_prepare (lua_State *L) {
-  const char *q = luaL_checkstring(L, 1);
-  int nargs, cursoropt;
-  luaP_Plan *p;
-  if (lua_isnoneornil(L, 2)) nargs = 0;
-  else {
-    if (lua_type(L, 2) != LUA_TTABLE) luaP_typeerror(L, 2, "table");
-    nargs = lua_rawlen(L, 2);
-  }
-  cursoropt = luaL_optinteger(L, 3, 0);
-  p = (luaP_Plan *) lua_newuserdata(L,
-      sizeof(luaP_Plan) + nargs * sizeof(Oid));
-  p->issaved = 0;
-  p->nargs = nargs;
-  if (nargs > 0) { /* read types? */
-    lua_pushnil(L);
-    while (lua_next(L, 2)) {
-      int k = lua_tointeger(L, -2);
-      if (k > 0) {
-        const char *s = luaL_checkstring(L, -1);
-        Oid type = luaP_gettypeoid(s);
-        if (type == InvalidOid)
-          return luaL_error(L, "invalid type to plan: %s", s);
-        p->type[k - 1] = type;
-      }
-      lua_pop(L, 1);
+    int nargs, cursoropt;
+    const char *q = luaL_checkstring(L, 1);
+
+    luaP_Plan *p;
+    if (lua_isnoneornil(L, 2)) nargs = 0;
+    else {
+        if (lua_type(L, 2) != LUA_TTABLE) luaP_typeerror(L, 2, "table");
+        nargs = lua_rawlen(L, 2);
     }
-  }
-  p->plan = SPI_prepare_cursor(q, nargs, p->type, cursoropt);
-  if (SPI_result < 0)
-    return luaL_error(L, "SPI_prepare error: %d", SPI_result);
-  luaP_getfield(L, PLLUA_PLANMT);
-  lua_setmetatable(L, -2);
-  return 1;
+    cursoropt = luaL_optinteger(L, 3, 0);
+    (void)cursoropt;
+    p = (luaP_Plan *) lua_newuserdata(L,
+                                      sizeof(luaP_Plan) + nargs * sizeof(Oid));
+    p->issaved = 0;
+    p->nargs = nargs;
+    if (nargs > 0) { /* read types? */
+        lua_pushnil(L);
+        while (lua_next(L, 2)) {
+            int k = lua_tointeger(L, -2);
+            if (k > 0) {
+                const char *s = luaL_checkstring(L, -1);
+                Oid type = luaP_gettypeoid(s);
+                if (type == InvalidOid)
+                    return luaL_error(L, "invalid type to plan: %s", s);
+                p->type[k - 1] = type;
+            }
+            lua_pop(L, 1);
+        }
+    }
+    p->plan = SPI_prepare_cursor(q, nargs, p->type, cursoropt);
+    if (SPI_result < 0)
+        return luaL_error(L, "SPI_prepare error: %d", SPI_result);
+    luaP_getfield(L, PLLUA_PLANMT);
+    lua_setmetatable(L, -2);
+    return 1;
 }
 
 static int luaP_execute (lua_State *L) {

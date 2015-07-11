@@ -71,6 +71,7 @@ Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
 }
 #endif
 
+
 static const int tuple_info = 0;
 void *p_tuple_info()
 {
@@ -84,4 +85,17 @@ MemoryContext luaP_getmemctxt(lua_State *L) {
     mcxt = (MemoryContext) lua_touserdata(L, -1);
     lua_pop(L, 1);
     return mcxt;
+}
+
+void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
+    luaL_checkstack(L, nup+1, "too many upvalues");
+    for (; l->name != NULL; l++) {  /* fill the table with given functions */
+        int i;
+        lua_pushstring(L, l->name);
+        for (i = 0; i < nup; i++)  /* copy upvalues to the top */
+            lua_pushvalue(L, -(nup+1));
+        lua_pushcclosure(L, l->func, nup);  /* closure with those upvalues */
+        lua_settable(L, -(nup + 3));
+    }
+    lua_pop(L, nup);  /* remove upvalues */
 }
