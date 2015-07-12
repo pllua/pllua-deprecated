@@ -6,8 +6,8 @@
 #include <lauxlib.h>
 
 
-void setLINE(const char *location);
-const char * getLINE();
+void setLINE(char *location);
+const char * getLINE(void);
 
 
 #include <stdio.h>
@@ -24,5 +24,6 @@ void stackDump (lua_State *L);
 
 
 #define out(...) ereport(INFO, (errmsg(__VA_ARGS__)))
+#define dolog(...) ereport(LOG, (errmsg(__VA_ARGS__)))
 
 #endif // PLLUA_DEBUG_H

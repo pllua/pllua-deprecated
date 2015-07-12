@@ -27,13 +27,13 @@
 
 
 static  char *_location;
-void setLINE(const char *location)
+void setLINE(char *location)
 {
     _location = location;
 }
 
 
-const char *getLINE()
+const char *getLINE(void)
 {
     return _location;
 }

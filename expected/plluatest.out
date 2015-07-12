@@ -489,6 +489,25 @@ SELECT echo_mytype((1::int2, 666.777, array[1.0, 2.0]) );
  (1,666.777,"{1.0,2.0}")
 (1 row)
 
+CREATE FUNCTION nested_server_rows () RETURNS SETOF text as
+$$
+for left in server.rows('select generate_series as left from generate_series(3,4) ') do
+for right in server.rows('select generate_series as right from generate_series(5,6) ') do
+	local s = left.left.." "..right.right
+	coroutine.yield(s)
+end
+end
+$$
+language pllua;
+select nested_server_rows();
+ nested_server_rows 
+--------------------
+ 3 5
+ 3 6
+ 4 5
+ 4 6
+(4 rows)
+
 -- body reload
 SELECT hello('PostgreSQL');
        hello        

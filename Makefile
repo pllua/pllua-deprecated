@@ -38,7 +38,9 @@ pllua.o \
 pllua_debug.o \
 plluaapi.o \
 plluaspi.o \
-lua_int64.o
+lua_int64.o \
+rtupdesc.o \
+rtupdescstk.o
 
 PG_CPPFLAGS = $(LUAINC)
 SHLIB_LINK = $(LUALIB)
