@@ -20,23 +20,29 @@ static const char PLLUA_PLANMT[] = "plan";
 static const char PLLUA_CURSORMT[] = "cursor";
 static const char PLLUA_TUPTABLEMT[] = "tupletable";
 
+#include "rtupdesc.h"
+
 typedef struct luaP_Tuple {
   int changed;
   Oid relid;
   HeapTuple tuple;
-  TupleDesc desc;
+  TupleDesc tupdesc;
   Datum *value;
   bool *null;
+  RTupDesc *rtupdesc;
 } luaP_Tuple;
 
 typedef struct luaP_Tuptable {
   int size;
   Portal cursor;
   SPITupleTable *tuptable;
+  TupleDesc tupdesc;
+  RTupDesc *rtupdesc;
 } luaP_Tuptable;
 
 typedef struct luaP_Cursor {
   Portal cursor;
+  RTupDesc *rtupdesc;
 } luaP_Cursor;
 
 typedef struct luaP_Plan {
@@ -96,26 +102,79 @@ void luaP_pushdesctable (lua_State *L, TupleDesc desc) {
   }
 }
 
-static int luaP_rowsaux (lua_State *L) {
-  luaP_Cursor *c = (luaP_Cursor *) lua_touserdata(L, lua_upvalueindex(1));
-  int init = lua_toboolean(L, lua_upvalueindex(2));
-  SPI_cursor_fetch(c->cursor, 1, 1);
-  if (SPI_processed > 0) { /* any row? */
-    if (!init) { /* register tupdesc */
-      lua_pushinteger(L, (int) InvalidOid);
-      luaP_pushdesctable(L, SPI_tuptable->tupdesc);
-      lua_rawset(L, LUA_REGISTRYINDEX);
-      lua_pushboolean(L, 1);
-      lua_replace(L, lua_upvalueindex(2));
+static void luaP_pushtuple_cmn (lua_State *L, HeapTuple tuple,
+                      int readonly, RTupDesc* rtupdesc) {
+    luaP_Tuple *t;
+    TupleDesc tupleDesc;
+    int i, n;
+
+    BEGINLUA;
+    tupleDesc = rtupdesc->tupdesc;
+    n = tupleDesc->natts;
+
+    t = lua_newuserdata(L, sizeof(luaP_Tuple)
+                        + n * (sizeof(Datum) + sizeof(bool)));
+
+    t->value = (Datum *) (t + 1);
+    t->null = (bool *) (t->value + n);
+    t->rtupdesc = rtupdesc_ref(rtupdesc);
+    for (i = 0; i < n; i++) {
+
+        bool isnull;
+        t->value[i] = heap_getattr(tuple, tupleDesc->attrs[i]->attnum, tupleDesc,
+                                   &isnull);
+        t->null[i] = isnull;
     }
-    luaP_pushtuple(L, SPI_tuptable->tupdesc, SPI_tuptable->vals[0],
-        InvalidOid, 1);
-  }
-  else {
-    SPI_cursor_close(c->cursor);
-    lua_pushnil(L);
-  }
-  return 1;
+
+    if (readonly) {
+        t->changed = -1;
+    }
+    else {
+        t->changed = 0;
+    }
+
+    t->tupdesc = 0;
+
+    t->relid = 0;
+    t->tuple = tuple;
+    luaP_getfield(L, PLLUA_TUPLEMT);
+    lua_setmetatable(L, -2);
+    ENDLUAV(1);
+}
+
+
+
+static int luaP_rowsaux (lua_State *L) {
+    luaP_Cursor *c;
+    int init;
+
+    BEGINLUA;
+    c = (luaP_Cursor *) lua_touserdata(L, lua_upvalueindex(1));
+    init = lua_toboolean(L, lua_upvalueindex(2));
+
+    SPI_cursor_fetch(c->cursor, 1, 1);
+    if (SPI_processed > 0) { /* any row? */
+        if(c->rtupdesc == 0){
+            c->rtupdesc = rtupdesc_ctor(L,SPI_tuptable->tupdesc);
+        }
+        if (!init) { /* register tupdesc */
+            lua_pushboolean(L, 1);
+            lua_replace(L, lua_upvalueindex(2));
+        }
+        luaP_pushtuple_cmn(L, SPI_tuptable->vals[0],
+                1, c->rtupdesc);
+
+    }
+    else {
+        rtupdesc_unref(c->rtupdesc);
+        SPI_cursor_close(c->cursor);
+        lua_pushnil(L);
+    }
+    SPI_freetuptable(SPI_tuptable);
+
+
+    ENDLUAV(1);
+    return 1;
 }
 
 /* ======= Buffer ======= */
@@ -159,29 +218,56 @@ static void luaP_fillbuffer (lua_State *L, int pos, Oid *type,
 
 
 /* ======= Tuple ======= */
+static int luaP_tuplegc (lua_State *L) {
+    luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
+    rtupdesc_unref(t->rtupdesc);
+    return 0;
+}
 
 static int luaP_tupleindex (lua_State *L) {
   luaP_Tuple *t = (luaP_Tuple *) lua_touserdata(L, 1);
   const char *name = luaL_checkstring(L, 2);
-  int i;
+  int i =-1;
+  int idx = -1;
+  if (t->rtupdesc){
+      TupleDesc tupleDesc = rtupdesc_gettup(t->rtupdesc);
+      if (tupleDesc == NULL){
+          ereport(WARNING, (errmsg("access to lost tuple desc at  '%s'", name)));
+          lua_pushnil(L);
+          return 1;
+      }
+      for (i = 0; i< tupleDesc->natts; ++i){
+
+          if (strcmp(NameStr(tupleDesc->attrs[i]->attname),name) == 0){
+              idx = i;
+              break;
+          }
+      }
+      i = idx;
+      if (i >= 0) {
+          if (!t->null[i])
+            luaP_pushdatum(L, t->value[i], tupleDesc->attrs[i]->atttypid);
+          else lua_pushnil(L);
+      }
+      else {
+          ereport(WARNING, (errmsg("tuple has no field '%s'", name)));
+          lua_pushnil(L);
+      }
+      return 1;
+  }
+  //triggers data
+
+
   lua_pushinteger(L, (int) t->relid);
   lua_rawget(L, LUA_REGISTRYINDEX);
   lua_getfield(L, -1, name);
   i = luaL_optinteger(L, -1, -1);
+
+
   if (i >= 0) {
-    if (t->changed == -1) { /* read-only? */
-      bool isnull;
-      Datum v = heap_getattr(t->tuple,
-          t->desc->attrs[i]->attnum, t->desc, &isnull);
-      if (!isnull)
-        luaP_pushdatum(L, v, t->desc->attrs[i]->atttypid);
-      else lua_pushnil(L);
-    }
-    else {
       if (!t->null[i])
-        luaP_pushdatum(L, t->value[i], t->desc->attrs[i]->atttypid);
+        luaP_pushdatum(L, t->value[i], t->tupdesc->attrs[i]->atttypid);
       else lua_pushnil(L);
-    }
   }
   else lua_pushnil(L);
   return 1;
@@ -200,8 +286,8 @@ static int luaP_tuplenewindex (lua_State *L) {
   lua_settop(L, 3);
   if (i >= 0) { /* found? */
     bool isnull;
-    t->value[i] = luaP_todatum(L, t->desc->attrs[i]->atttypid,
-        t->desc->attrs[i]->atttypmod, &isnull);
+    t->value[i] = luaP_todatum(L, t->tupdesc->attrs[i]->atttypid,
+        t->tupdesc->attrs[i]->atttypmod, &isnull);
     t->null[i] = isnull;
     t->changed = 1;
   }
@@ -215,44 +301,52 @@ static int luaP_tupletostring (lua_State *L) {
   return 1;
 }
 
-void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
-    Oid relid, int readonly) {
-  luaP_Tuple *t;
-  int i, n = desc->natts;
-  if (readonly) {
-    t = lua_newuserdata(L, sizeof(luaP_Tuple));
-    t->changed = -1;
-    t->value = NULL;
-    t->null = NULL;
-  }
-  else {
+void luaP_pushtuple_trg (lua_State *L, TupleDesc desc, HeapTuple tuple,
+                     Oid relid, int readonly) {
+    luaP_Tuple *t;
+    int i, n;
+
+    BEGINLUA;
+
+    n = desc->natts;
+
     t = lua_newuserdata(L, sizeof(luaP_Tuple)
-        + n * (sizeof(Datum) + sizeof(bool)));
-    t->changed = 0;
+                        + n * (sizeof(Datum) + sizeof(bool)));
+    if (readonly) {
+        t->changed = -1;
+    }
+    else {
+        t->changed = 0;
+    }
+
     t->value = (Datum *) (t + 1);
     t->null = (bool *) (t->value + n);
+
+    t->rtupdesc = 0;
     for (i = 0; i < n; i++) {
-      bool isnull;
-      t->value[i] = heap_getattr(tuple, desc->attrs[i]->attnum, desc,
-          &isnull);
-      t->null[i] = isnull;
+        bool isnull;
+        t->value[i] = heap_getattr(tuple, desc->attrs[i]->attnum, desc,
+                                   &isnull);
+        t->null[i] = isnull;
     }
-  }
-  t->desc = desc;
-  t->relid = relid;
-  t->tuple = tuple;
-  luaP_getfield(L, PLLUA_TUPLEMT);
-  lua_setmetatable(L, -2);
+
+    t->tupdesc = desc;
+    t->relid = relid;
+    t->tuple = tuple;
+    luaP_getfield(L, PLLUA_TUPLEMT);
+    lua_setmetatable(L, -2);
+    ENDLUAV(1);
 }
+
 
 /* adapted from SPI_modifytuple */
 static HeapTuple luaP_copytuple (luaP_Tuple *t) {
-  HeapTuple tuple = heap_form_tuple(t->desc, t->value, t->null);
+  HeapTuple tuple = heap_form_tuple(t->tupdesc, t->value, t->null);
   /* copy identification info */
   tuple->t_data->t_ctid = t->tuple->t_data->t_ctid;
   tuple->t_self = t->tuple->t_self;
   tuple->t_tableOid = t->tuple->t_tableOid;
-  if (t->desc->tdhasoid)
+  if (t->tupdesc->tdhasoid)
     HeapTupleSetOid(tuple, HeapTupleGetOid(t->tuple));
   return SPI_copytuple(tuple); /* in upper mem context */
 }
@@ -293,7 +387,7 @@ HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc) {
     if (j >= 0) {
       if (t->changed == -1) /* read-only? */
         b->value[i] = heap_getattr(t->tuple,
-            t->desc->attrs[j]->attnum, t->desc, b->null + i);
+            t->tupdesc->attrs[j]->attnum, t->tupdesc, b->null + i);
       else {
         b->value[i] = t->value[j];
         b->null[i] = t->null[j];
@@ -308,49 +402,61 @@ HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc) {
 /* ======= TupleTable ======= */
 
 static void luaP_pushtuptable (lua_State *L, Portal cursor) {
-  luaP_Tuptable *t;
-  luaP_getfield(L, PLLUA_TUPTABLE);
-  t = (luaP_Tuptable *) lua_touserdata(L, -1);
-  if (t == NULL) { /* not initialized? */
-    lua_pop(L, 1);
-    t = (luaP_Tuptable *) lua_newuserdata(L, sizeof(luaP_Tuptable));
-    luaP_getfield(L, PLLUA_TUPTABLEMT);
-    lua_setmetatable(L, -2);
-    lua_pushlightuserdata(L, (void *) PLLUA_TUPTABLE);
-    lua_pushvalue(L, -2); /* tuptable */
-    lua_rawset(L, LUA_REGISTRYINDEX);
-  }
-  t->size = SPI_processed;
-  t->tuptable = SPI_tuptable;
-  if (cursor == NULL || (cursor != NULL && t->cursor != cursor)) {
-    lua_pushinteger(L, (int) InvalidOid);
-    luaP_pushdesctable(L, t->tuptable->tupdesc);
-    lua_rawset(L, LUA_REGISTRYINDEX);
-    t->cursor = cursor;
-  }
-  /* reset tuptable env */
-  lua_newtable(L); /* env */
-  lua_setuservalue(L, -2);
+    luaP_Tuptable *t;
+
+    BEGINLUA;
+
+    luaP_getfield(L, PLLUA_TUPTABLE);
+    t = (luaP_Tuptable *) lua_touserdata(L, -1);
+    if (t == NULL) { /* not initialized? */
+        lua_pop(L, 1);
+        t = (luaP_Tuptable *) lua_newuserdata(L, sizeof(luaP_Tuptable));
+        t->rtupdesc = 0;
+
+        luaP_getfield(L, PLLUA_TUPTABLEMT);
+        lua_setmetatable(L, -2);
+        lua_pushlightuserdata(L, (void *) PLLUA_TUPTABLE);
+        lua_pushvalue(L, -2); /* tuptable */
+        lua_rawset(L, LUA_REGISTRYINDEX);
+    }
+    t->size = SPI_processed;
+    t->tuptable = SPI_tuptable;
+    t->rtupdesc = rtupdesc_ctor(L,SPI_tuptable->tupdesc);
+
+    if (cursor == NULL || (cursor != NULL && t->cursor != cursor)) {
+        t->cursor = cursor;
+    }
+
+    /* reset tuptable env */
+    lua_newtable(L); /* env */
+    lua_setuservalue(L, -2);
+    ENDLUAV(1);
 }
 
 static int luaP_tuptableindex (lua_State *L) {
   luaP_Tuptable *t = (luaP_Tuptable *) lua_touserdata(L, 1);
   int k = lua_tointeger(L, 2);
+
   if (k == 0) { /* attributes? */
-    lua_pushinteger(L, (int) InvalidOid);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-  }
-  else if (k > 0 && k <= t->size) {
-    lua_getuservalue(L, 1);
-    lua_rawgeti(L, -1, k);
-    if (lua_isnil(L, -1)) { /* not interned? */
-      lua_pop(L, 1); /* nil */
-      luaP_pushtuple(L, t->tuptable->tupdesc, t->tuptable->vals[k - 1],
-          InvalidOid, 1);
-      lua_pushvalue(L, -1);
-      lua_rawseti(L, -3, k);
+
+      lua_pushnil(L);
     }
-  }
+  else if (k > 0 && k <= t->size) {
+      lua_getuservalue(L, 1);
+      lua_rawgeti(L, -1, k);
+      if (lua_isnil(L, -1)) { /* not interned? */
+          lua_pop(L, 1); /* nil */
+
+          luaP_pushtuple_cmn(L, t->tuptable->vals[k - 1],
+              1, t->rtupdesc);
+
+          lua_pushvalue(L, -1);
+
+          lua_rawseti(L, -3, k);
+        }
+    }else{
+      lua_pushnil(L);
+    }
   return 1;
 }
 
@@ -361,7 +467,9 @@ static int luaP_tuptablelen (lua_State *L) {
 }
 
 static int luaP_tuptablegc (lua_State *L) {
+  //in case SELECT * FROM get_rows('name'); not sure if collected...
   luaP_Tuptable *t = (luaP_Tuptable *) lua_touserdata(L, 1);
+  rtupdesc_unref(t->rtupdesc);
   SPI_freetuptable(t->tuptable);
   return 0;
 }
@@ -374,9 +482,12 @@ static int luaP_tuptabletostring (lua_State *L) {
 
 /* ======= Cursor ======= */
 
+
 void luaP_pushcursor (lua_State *L, Portal cursor) {
+
   luaP_Cursor *c = (luaP_Cursor *) lua_newuserdata(L, sizeof(luaP_Cursor));
   c->cursor = cursor;
+  c->rtupdesc = 0;
   luaP_getfield(L, PLLUA_CURSORMT);
   lua_setmetatable(L, -2);
 }
@@ -528,6 +639,7 @@ static int luaP_rowsplan (lua_State *L) {
   }
   else
     cursor = SPI_cursor_open(NULL, p->plan, NULL, NULL, 1);
+
   if (cursor == NULL)
     return luaL_error(L, "error opening cursor");
   luaP_pushcursor(L, cursor);
@@ -539,12 +651,12 @@ static int luaP_rowsplan (lua_State *L) {
 
 /* ======= SPI ======= */
 
-Oid luaP_gettypeoid (const char *typename) {
+Oid luaP_gettypeoid (const char *type_name) {
 #if PG_VERSION_NUM < 80300
-  List *namelist = stringToQualifiedNameList(typename, NULL);
+  List *namelist = stringToQualifiedNameList(type_name, NULL);
   HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist));
 #else
-  List *namelist = stringToQualifiedNameList(typename);
+  List *namelist = stringToQualifiedNameList(type_name);
   HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist), NULL);
 #endif
   Oid typeoid = HeapTupleGetOid(typetup);
@@ -613,17 +725,27 @@ static int luaP_find (lua_State *L) {
 
 static int luaP_rows (lua_State *L) {
   Portal cursor;
-  SPI_plan *p = SPI_prepare_cursor(luaL_checkstring(L, 1), 0, NULL, 0);
-  if (SPI_result < 0)
-    return luaL_error(L, "SPI_prepare error: %d", SPI_result);
-  if (!SPI_is_cursor_plan(p))
-    return luaL_error(L, "Statement is not iterable");
-  cursor = SPI_cursor_open(NULL, p, NULL, NULL, 1);
-  if (cursor == NULL)
-    return luaL_error(L, "error opening cursor");
-  luaP_pushcursor(L, cursor);
-  lua_pushboolean(L, 0); /* not inited */
-  lua_pushcclosure(L, luaP_rowsaux, 2);
+  PG_TRY();
+  {
+      SPI_plan *p = SPI_prepare_cursor(luaL_checkstring(L, 1), 0, NULL, 0);
+      if (SPI_result < 0)
+        return luaL_error(L, "SPI_prepare error: %d", SPI_result);
+      if (!SPI_is_cursor_plan(p))
+        return luaL_error(L, "Statement is not iterable");
+      cursor = SPI_cursor_open(NULL, p, NULL, NULL, 1);
+      SPI_freeplan(p);
+      if (cursor == NULL)
+        return luaL_error(L, "error opening cursor");
+      luaP_pushcursor(L, cursor);
+      lua_pushboolean(L, 0); /* not inited */
+      lua_pushcclosure(L, luaP_rowsaux, 2);
+  }
+  PG_CATCH();
+  {
+      ErrorData  *errdata = CopyErrorData();
+      return luaL_error(L, "SPI_prepare error: %s", errdata->message);
+  }
+  PG_END_TRY();
   return 1;
 }
 
@@ -662,6 +784,7 @@ static const luaL_Reg luaP_Tuple_mt[] = {
   {"__index", luaP_tupleindex},
   {"__newindex", luaP_tuplenewindex},
   {"__tostring", luaP_tupletostring},
+  {"__gc", luaP_tuplegc},
   {NULL, NULL}
 };
 

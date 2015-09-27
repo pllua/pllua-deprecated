@@ -23,15 +23,25 @@ LUALIB ?= -L/usr/local/lib -llua
 #LUAINC = -IC:/PROGRA~1/Lua/5.1/include
 #LUALIB = -LC:/PROGRA~1/Lua/5.1/lib -llua5.1
 
-
 # no need to edit below here
 MODULE_big = pllua
 EXTENSION = pllua
 DATA = pllua--1.0.sql
 #DATA_built = pllua.sql
 
-REGRESS = plluatest
-OBJS = pllua.o plluaapi.o plluaspi.o lua_int64.o
+REGRESS = \
+plluatest \
+biginttest
+
+OBJS = \
+pllua.o \
+pllua_debug.o \
+plluaapi.o \
+plluaspi.o \
+lua_int64.o \
+rtupdesc.o \
+rtupdescstk.o
+
 PG_CPPFLAGS = $(LUAINC)
 SHLIB_LINK = $(LUALIB)
 
@@ -39,4 +49,5 @@ SHLIB_LINK = $(LUALIB)
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
+#override CPPFLAGS := -I. -I$(srcdir) $(CPPFLAGS) -DPLLUA_DEBUG
 

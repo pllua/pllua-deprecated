@@ -7,6 +7,7 @@
 #include "pllua.h"
 #include "rowstamp.h"
 #include "lua_int64.h"
+#include "rtupdescstk.h"
 
 /*
  * [[ Uses of REGISTRY ]]
@@ -27,6 +28,7 @@
 
 /* extended function info */
 typedef struct luaP_Info {
+  RTupDescStack funcxt;
   int oid;
   int vararg;
   Oid result;
@@ -86,10 +88,17 @@ static const char PLLUA_DATUM[] = "datum";
 #define resulterror(type) \
   elog(ERROR, "[pllua]: type '%s' (%d) not supported as result", \
       format_type_be(type), (type))
+#if defined(PLLUA_DEBUG)
+#define luaP_error(L, tag) \
+        ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
+             errmsg("[pllua]: error: %s", tag), \
+             errdetail("%s", lua_tostring((L), -1))))
+#else
 #define luaP_error(L, tag) \
         ereport(ERROR, (errcode(ERRCODE_DATA_EXCEPTION), \
              errmsg("[pllua]: " tag " error"), \
              errdetail("%s", lua_tostring((L), -1))))
+#endif
 
 #define datum2string(d, f) \
   DatumGetCString(DirectFunctionCall1((f), (d)))
@@ -116,15 +125,7 @@ static Datum datumcopy (Datum dat, luaP_Typeinfo *ti) {
   return dat;
 }
 
-/* get MemoryContext for state L */
-static MemoryContext luaP_getmemctxt (lua_State *L) {
-  MemoryContext mcxt;
-  lua_pushlightuserdata(L, (void *) L);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  mcxt = (MemoryContext) lua_touserdata(L, -1);
-  lua_pop(L, 1);
-  return mcxt;
-}
+
 
 
 /* ======= Type ======= */
@@ -280,6 +281,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   luaP_pushdesctable(L, tdata->tg_relation->rd_att);
   lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
   lua_pushvalue(L, -2); /* attribute table */
+  
   lua_rawset(L, LUA_REGISTRYINDEX); /* cache desc */
   lua_setfield(L, -2, "attributes");
   lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
@@ -292,15 +294,15 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   /* row */
   if (TRIGGER_FIRED_FOR_ROW(tdata->tg_event)) {
     if (TRIGGER_FIRED_BY_UPDATE(tdata->tg_event)) {
-      luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_newtuple,
+      luaP_pushtuple_trg(L, tdata->tg_relation->rd_att, tdata->tg_newtuple,
           tdata->tg_relation->rd_id, 0);
       lua_setfield(L, -2, "row"); /* new row */
-      luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
+      luaP_pushtuple_trg(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
           tdata->tg_relation->rd_id, 1);
       lua_setfield(L, -2, "old"); /* old row */
     }
     else { /* insert or delete */
-      luaP_pushtuple(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
+      luaP_pushtuple_trg(L, tdata->tg_relation->rd_att, tdata->tg_trigtuple,
           tdata->tg_relation->rd_id, 0);
       lua_setfield(L, -2, "row"); /* old row */
     }
@@ -323,6 +325,7 @@ static Datum luaP_gettriggerresult (lua_State *L) {
 }
 
 static void luaP_cleantrigger (lua_State *L) {
+  rtds_tryclean(rtds_get_current()); //fi->functx;
   lua_pushglobaltable(L);
   lua_pushstring(L, PLLUA_TRIGGERVAR);
   lua_pushnil(L);
@@ -426,9 +429,9 @@ static int luaP_info (lua_State *L) {
 }
 
 static int luaP_log (lua_State *L) {
-  luaL_checkstring(L, 1);
-  ereport(LOG, (errmsg("%s", lua_tostring(L, 1))));
-  return 0;
+    luaL_checkstring(L, 1);
+    ereport(LOG, (errmsg("%s", lua_tostring(L, 1))));
+    return 0;
 }
 
 static int luaP_notice (lua_State *L) {
@@ -475,6 +478,7 @@ void luaP_close (lua_State *L) {
 
 lua_State *luaP_newstate (int trusted) {
   int status;
+
   MemoryContext mcxt = AllocSetContextCreate(TopMemoryContext,
       "PL/Lua context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
       ALLOCSET_DEFAULT_MAXSIZE);
@@ -483,8 +487,12 @@ lua_State *luaP_newstate (int trusted) {
   lua_pushliteral(L, PLLUA_VERSION);
   lua_setglobal(L, "_PLVERSION");
   /* memory context */
-  lua_pushlightuserdata(L, (void *) L);
+  lua_pushlightuserdata(L, p_lua_mem_cxt);
   lua_pushlightuserdata(L, (void *) mcxt);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+
+  lua_pushlightuserdata(L, p_lua_master_state);
+  lua_pushlightuserdata(L, (void *) L);
   lua_rawset(L, LUA_REGISTRYINDEX);
   /* core libs */
   if (trusted) {
@@ -558,6 +566,7 @@ lua_State *luaP_newstate (int trusted) {
   lua_pushglobaltable(L);
   luaP_register(L, luaP_funcs);
   lua_pop(L, 1);
+
   /* SPI */
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
@@ -604,6 +613,7 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
   int i;
   luaP_Typeinfo *ti;
   fi = lua_newuserdata(L, sizeof(luaP_Info) + nargs * sizeof(Oid));
+  fi->funcxt = NULL;
   fi->oid = oid;
   /* read arg types */
   for (i = 0; i < nargs; i++) {
@@ -800,7 +810,6 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat));
       break;
     case INT8OID:
-	//pushint64 lua_int64.c
         setInt64lua(L,(DatumGetInt64(dat)));
         break;
     case TEXTOID:
@@ -1162,11 +1171,12 @@ static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
 
 /* ======= luaP_callhandler ======= */
 
-static void luaP_cleanthread (lua_State *L, lua_State **thread) {
-  lua_pushlightuserdata(L, (void *) *thread);
-  lua_pushnil(L);
-  lua_rawset(L, LUA_REGISTRYINDEX);
-  *thread = NULL;
+static void luaP_cleanthread (lua_State *L, lua_State **thread, luaP_Info *fi) {
+    fi->funcxt = rtds_free_if_not_used(fi->funcxt);
+    lua_pushlightuserdata(L, (void *) *thread);
+    lua_pushnil(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+    *thread = NULL;
 }
 
 Datum luaP_validator (lua_State *L, Oid oid) {
@@ -1194,11 +1204,18 @@ Datum luaP_validator (lua_State *L, Oid oid) {
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
   Datum retval = 0;
   luaP_Info *fi;
+  RTupDescStack prev;
   bool istrigger;
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
   istrigger = CALLED_AS_TRIGGER(fcinfo);
   fi = luaP_pushfunction(L, (int) fcinfo->flinfo->fn_oid);
+  if (fi->funcxt == NULL){
+      fi->funcxt = rtds_initStack(L);
+  }
+  rtds_inuse(fi->funcxt);
+
+  prev = rtds_set_current(fi->funcxt);
   PG_TRY();
   {
     if ((fi->result == TRIGGEROID && !istrigger)
@@ -1213,7 +1230,13 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
       nargs = trigdata->tg_trigger->tgnargs;
       for (i = 0; i < nargs; i++) /* push args */
         lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
-      if (lua_pcall(L, nargs, 0, 0)) luaP_error(L, "runtime");
+      if (lua_pcall(L, nargs, 0, 0)) {
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+      }
       if (TRIGGER_FIRED_FOR_ROW(trigdata->tg_event)
           && TRIGGER_FIRED_BEFORE(trigdata->tg_event)) /* return? */
         retval = luaP_gettriggerresult(L);
@@ -1239,11 +1262,13 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         }
         lua_xmove(L, fi->L, 1); /* function */
         luaP_pushargs(fi->L, fcinfo, fi);
+
 #if LUA_VERSION_NUM <= 501
         status = lua_resume(fi->L, fcinfo->nargs);
 #else
         status = lua_resume(fi->L, fi->L, fcinfo->nargs);
 #endif
+        rtds_notinuse(fi->funcxt);
         hasresult = !lua_isnoneornil(fi->L, 1);
         if (status == LUA_YIELD && hasresult) {
           rsi->isDone = ExprMultipleResult; /* SRF: next */
@@ -1253,14 +1278,29 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
           rsi->isDone = ExprEndResult; /* SRF: done */
           fcinfo->isnull = true;
           retval = (Datum) 0;
-          luaP_cleanthread(L, &fi->L);
+          luaP_cleanthread(L, &fi->L, fi);
         }
-        else luaP_error(fi->L, "runtime");
+        else {
+#if defined(PLLUA_DEBUG)
+        luaP_error(fi->L, getLINE());
+#else
+        luaP_error(fi->L, "runtime");
+#endif
+    }
       }
       else {
         luaP_pushargs(L, fcinfo, fi);
-        if (lua_pcall(L, fcinfo->nargs, 1, 0))
-          luaP_error(L, "runtime");
+        if (lua_pcall(L, fcinfo->nargs, 1, 0)){
+
+            fi->funcxt = rtds_unref(fi->funcxt);
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+    }
+        fi->funcxt = rtds_unref(fi->funcxt);
+
         retval = luaP_getresult(L, fcinfo, fi->result);
       }
     }
@@ -1269,9 +1309,10 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
   PG_CATCH();
   {
     if (L != NULL) {
-      luaP_cleantrigger(L);
+      luaP_cleantrigger(L);//fi->funcxt ref--
+
       if (fi->result_isset && fi->L != NULL) /* clean thread? */
-        luaP_cleanthread(L, &fi->L);
+        luaP_cleanthread(L, &fi->L, fi);
       lua_settop(L, 0); /* clear Lua stack */
     }
     fcinfo->isnull = true;
@@ -1279,22 +1320,40 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     PG_RE_THROW();
   }
   PG_END_TRY();
+  rtds_set_current(prev);
   if (SPI_finish() != SPI_OK_FINISH)
     elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   return retval;
 }
 
+#include "rtupdesc.h"
 #if PG_VERSION_NUM >= 90000
 /* ======= luaP_inlinehandler ======= */
 
 Datum luaP_inlinehandler (lua_State *L, const char *source) {
+    RTupDescStack funcxt;
+    RTupDescStack prev;
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
+
+  funcxt = rtds_initStack(L);
+  rtds_inuse(funcxt);
+
+  prev = rtds_set_current(funcxt);
   PG_TRY();
   {
     if (luaL_loadbuffer(L, source, strlen(source), PLLUA_CHUNKNAME))
       luaP_error(L, "compile");
-    if (lua_pcall(L, 0, 0, 0)) luaP_error(L, "runtime");
+    if (lua_pcall(L, 0, 0, 0)) {
+        funcxt = rtds_unref(funcxt);
+        rtds_set_current(prev);
+#if defined(PLLUA_DEBUG)
+        luaP_error(L, getLINE());
+#else
+        luaP_error(L, "runtime");
+#endif
+    }
+
   }
   PG_CATCH();
   {
@@ -1302,6 +1361,10 @@ Datum luaP_inlinehandler (lua_State *L, const char *source) {
     PG_RE_THROW();
   }
   PG_END_TRY();
+
+  funcxt = rtds_unref(funcxt);
+  rtds_set_current(prev);
+
   if (SPI_finish() != SPI_OK_FINISH)
     elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   PG_RETURN_VOID();

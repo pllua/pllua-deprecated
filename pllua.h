@@ -6,52 +6,14 @@
  * $Id: pllua.h,v 1.17 2009/09/19 16:20:45 carvalho Exp $
  */
 
-/* PostgreSQL */
-#include <postgres.h>
-#include <fmgr.h>
-#include <funcapi.h>
-#include <access/heapam.h>
-#if PG_VERSION_NUM >= 90300
-#include <access/htup_details.h>
-#endif
-#include <catalog/namespace.h>
-#include <catalog/pg_proc.h>
-#include <catalog/pg_type.h>
-#include <commands/trigger.h>
-#include <executor/spi.h>
-#include <nodes/makefuncs.h>
-#include <parser/parse_type.h>
-#include <utils/array.h>
-#include <utils/builtins.h>
-#include <utils/datum.h>
-#include <utils/lsyscache.h>
-#include <utils/memutils.h>
-#include <utils/rel.h>
-#include <utils/syscache.h>
-#include <utils/typcache.h>
-/* Lua */
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
 
-#if LUA_VERSION_NUM <= 501
-#define lua_pushglobaltable(L) lua_pushvalue(L, LUA_GLOBALSINDEX)
-#define lua_setuservalue lua_setfenv
-#define lua_getuservalue lua_getfenv
-#define lua_rawlen lua_objlen
-#define luaP_register(L,l) luaL_register(L, NULL, (l))
-#else
-#define luaP_register(L,l) luaL_setfuncs(L, (l), 0)
-#endif
+#include "plluacommon.h"
 
-#if !defined LUA_VERSION_NUM || LUA_VERSION_NUM==501
-/*
-** Adapted from Lua 5.2.0
-*/
-void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
-#endif
+/*used as a key for saving lua context lua_pushlightuserdata(p_lua_mem_cxt)
+  instead of lua_pushlightuserdata((void*)L) (in SRF the L is a lua_newthread)  */
+void p_lua_mem_cxt(void);
 
-#define PLLUA_VERSION "PL/Lua 1.0"
+void p_lua_master_state(void);
 
 typedef struct luaP_Buffer {
   int size;
@@ -73,12 +35,13 @@ Datum luaP_inlinehandler (lua_State *L, const char *source);
 /* general API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
 Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
-void luaP_pushtuple (lua_State *L, TupleDesc desc, HeapTuple tuple,
+
+void luaP_pushtuple_trg (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);
 HeapTuple luaP_totuple (lua_State *L);
 HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc);
 /* SPI */
-Oid luaP_gettypeoid (const char *typename);
+Oid luaP_gettypeoid (const char *type_name);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 void luaP_pushcursor (lua_State *L, Portal cursor);
