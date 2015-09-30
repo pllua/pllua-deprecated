@@ -1,4 +1,4 @@
-pllua
+pllua [![Build Status](https://travis-ci.org/pllua/pllua.svg)](https://travis-ci.org/pllua/pllua)
 =====
 
 PL/Lua is an implementation of Lua as a loadable procedural language for PostgreSQL: with PL/Lua you can use PostgreSQL functions and triggers written in the Lua programming language.
