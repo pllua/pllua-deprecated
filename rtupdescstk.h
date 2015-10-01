@@ -1,3 +1,9 @@
+/*
+ * functions for tupledesc resource management
+ * Author: Eugene Sergeev <eugeney.sergeev at gmail.com>
+ * Please check copyright notice at the bottom of pllua.h
+ */
+
 #ifndef RTUPDESCSTK_H
 #define RTUPDESCSTK_H
 
@@ -17,6 +23,7 @@ typedef struct stackType {
     int ref_count;
     lua_State *L;
     RTDNodePtr top;
+    void *resptr;
 } RTupDescStackType, *RTupDescStack;
 
 RTupDescStack rtds_set_current(void *s);

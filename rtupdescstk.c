@@ -1,5 +1,6 @@
 #include "rtupdescstk.h"
 #include "rtupdesc.h"
+#include "pllua_xact_cleanup.h"
 
 static void* current_func_cxt = NULL;
 RTupDescStack rtds_set_current(void *s){
@@ -66,6 +67,11 @@ int rtds_isempty(RTupDescStack S) {
     return (S -> top == NULL);
 }
 
+static void force_free(void *d){
+    if (d == NULL) return;
+    clean(d);
+    pfree(d);
+}
 
 RTupDescStack rtds_initStack(lua_State *L) {
     RTupDescStack sp;
@@ -76,6 +82,7 @@ RTupDescStack rtds_initStack(lua_State *L) {
     sp->ref_count = 0;
     sp->L = L;
     sp->top = NULL;
+    sp->resptr = register_resource(sp, force_free);
     return sp;
 }
 
@@ -144,6 +151,7 @@ RTupDescStack rtds_free_if_not_used(RTupDescStack S)
     if (S == NULL) return NULL;
     if (S->ref_count == 0){
         clean(S);
+        S->resptr = unregister_resource(S->resptr);
         pfree(S);
         return NULL;
     }

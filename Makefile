@@ -6,7 +6,7 @@ PKG_LIBDIR := $(shell $(PG_CONFIG) --pkglibdir)
 
 # General
 LUA_INCDIR ?= /usr/include/lua5.1
-LUALIB ?= -L/usr/local/lib -llua
+LUALIB ?= -L/usr/local/lib -llua5.1
 
 # LuaJIT
 #LUAINC = -I/usr/local/include/luajit-2.0
@@ -32,16 +32,21 @@ DATA = pllua--1.0.sql
 
 REGRESS = \
 plluatest \
-biginttest
+biginttest \
+pgfunctest \
+subtransaction
 
 OBJS = \
 pllua.o \
 pllua_debug.o \
+pllua_xact_cleanup.o \
 plluaapi.o \
 plluaspi.o \
 lua_int64.o \
 rtupdesc.o \
-rtupdescstk.o
+rtupdescstk.o \
+pllua_pgfunc.o \
+pllua_subxact.o
 
 PG_CPPFLAGS = -I$(LUA_INCDIR) #-DPLLUA_DEBUG
 SHLIB_LINK = $(LUALIB)

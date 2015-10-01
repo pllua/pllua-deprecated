@@ -15,6 +15,8 @@ void p_lua_mem_cxt(void);
 
 void p_lua_master_state(void);
 
+void p_remote_debug_info(void);
+
 typedef struct luaP_Buffer {
   int size;
   Datum *value;
@@ -34,7 +36,7 @@ Datum luaP_inlinehandler (lua_State *L, const char *source);
 #endif
 /* general API */
 void luaP_pushdatum (lua_State *L, Datum dat, Oid type);
-Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull);
+Datum luaP_todatum (lua_State *L, Oid type, int len, bool *isnull, int idx);
 
 void luaP_pushtuple_trg (lua_State *L, TupleDesc desc, HeapTuple tuple,
     Oid relid, int readonly);

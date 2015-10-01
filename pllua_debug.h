@@ -1,3 +1,9 @@
+/*
+ * debug helpers
+ * Author: Eugene Sergeev <eugeney.sergeev at gmail.com>
+ * Please check copyright notice at the bottom of pllua.h
+ */
+
 #ifndef PLLUA_DEBUG_H
 #define PLLUA_DEBUG_H
 

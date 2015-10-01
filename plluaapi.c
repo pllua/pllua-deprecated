@@ -9,6 +9,10 @@
 #include "lua_int64.h"
 #include "rtupdescstk.h"
 
+#include "pllua_pgfunc.h"
+#include "pllua_subxact.h"
+
+
 /*
  * [[ Uses of REGISTRY ]]
  * [general]
@@ -29,6 +33,7 @@
 /* extended function info */
 typedef struct luaP_Info {
   RTupDescStack funcxt;
+  bool code_storage;
   int oid;
   int vararg;
   Oid result;
@@ -104,6 +109,12 @@ static const char PLLUA_DATUM[] = "datum";
   DatumGetCString(DirectFunctionCall1((f), (d)))
 #define text2string(d) datum2string((d), textout)
 
+static int luaP_panic(lua_State *L){
+    (void)L;
+    ereport(FATAL, (errmsg("pllua  unhandled exception")));
+    return 0;
+}
+
 /* string2text is simpler, so we implement it here with allocation in upper
  * memory context */
 static Datum string2text (const char *str) {
@@ -138,7 +149,7 @@ static int luaP_typeinfogc (lua_State *L) {
 
 static luaP_Typeinfo *luaP_gettypeinfo (lua_State *L, int oid) {
   luaP_Typeinfo *ti;
-  lua_pushinteger(L, oid);
+  lua_push_oidstring(L, oid);
   lua_rawget(L, LUA_REGISTRYINDEX);
   if (lua_isnil(L, -1)) { /* not cached? */
     HeapTuple type;
@@ -171,7 +182,7 @@ static luaP_Typeinfo *luaP_gettypeinfo (lua_State *L, int oid) {
     lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
     lua_rawget(L, LUA_REGISTRYINDEX); /* Typeinfo_MT */
     lua_setmetatable(L, -2);
-    lua_pushinteger(L, oid);
+    lua_push_oidstring(L, oid);
     lua_pushvalue(L, -2);
     lua_rawset(L, LUA_REGISTRYINDEX); /* REG[oid] = typeinfo */
     lua_pop(L, 2); /* nil and typeinfo */
@@ -279,7 +290,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
   lua_pushstring(L, relname);
   lua_setfield(L, -2, "name");
   luaP_pushdesctable(L, tdata->tg_relation->rd_att);
-  lua_pushinteger(L, (int) tdata->tg_relation->rd_id);
+  lua_push_oidstring(L, (int) tdata->tg_relation->rd_id);
   lua_pushvalue(L, -2); /* attribute table */
   
   lua_rawset(L, LUA_REGISTRYINDEX); /* cache desc */
@@ -459,6 +470,26 @@ static int luaP_fromstring (lua_State *L) {
   return 1;
 }
 
+static int luaP_remote_debug_info (lua_State *L) {
+    BEGINLUA;
+    if ((lua_gettop(L) != 1)||(!lua_isboolean( L, 1 ))){
+        return luaL_error(L, "wrong arguments lentgh/type");
+    }
+    lua_pushlightuserdata(L, p_remote_debug_info);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    if (lua_isnil(L,-1)){
+        return luaL_error(L, "trusted lua does not support debugging");
+    }
+    lua_pop(L, 1);
+
+    lua_pushlightuserdata(L, p_remote_debug_info);
+    lua_swap(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+
+    ENDLUAV(-1);
+    return -1;
+}
+
 static const luaL_Reg luaP_funcs[] = {
   {"setshared", luaP_setshared},
   {"log", luaP_log},
@@ -467,6 +498,9 @@ static const luaL_Reg luaP_funcs[] = {
   {"notice", luaP_notice},
   {"warning", luaP_warning},
   {"fromstring", luaP_fromstring},
+  {"pgfunc", get_pgfunc},
+  {"subtransaction", use_subtransaction},
+  {"remote_debug_info", luaP_remote_debug_info},
   {NULL, NULL}
 };
 
@@ -483,6 +517,7 @@ lua_State *luaP_newstate (int trusted) {
       "PL/Lua context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
       ALLOCSET_DEFAULT_MAXSIZE);
   lua_State *L = luaL_newstate();
+  lua_atpanic(L, luaP_panic);
   /* version */
   lua_pushliteral(L, PLLUA_VERSION);
   lua_setglobal(L, "_PLVERSION");
@@ -494,6 +529,12 @@ lua_State *luaP_newstate (int trusted) {
   lua_pushlightuserdata(L, p_lua_master_state);
   lua_pushlightuserdata(L, (void *) L);
   lua_rawset(L, LUA_REGISTRYINDEX);
+
+  if(!trusted){
+      lua_pushlightuserdata(L, p_remote_debug_info);
+      lua_pushboolean(L, false);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+  }
   /* core libs */
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
@@ -537,6 +578,7 @@ lua_State *luaP_newstate (int trusted) {
   else
     luaL_openlibs(L);
 
+  register_funcinfo_mt(L);
   register_int64(L);
   /* setup typeinfo and raw datum MTs */
   lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
@@ -612,26 +654,36 @@ static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
   luaP_Info *fi;
   int i;
   luaP_Typeinfo *ti;
+  bool code_storage = ((nargs == 1)
+                       &&(argtype[0] == INTERNALOID)
+                       &&(rettype == INTERNALOID));
+
+
   fi = lua_newuserdata(L, sizeof(luaP_Info) + nargs * sizeof(Oid));
   fi->funcxt = NULL;
   fi->oid = oid;
-  /* read arg types */
-  for (i = 0; i < nargs; i++) {
-    ti = luaP_gettypeinfo(L, argtype[i]);
-    if (ti->type == 'p') /* pseudo-type? */
-      ereport(ERROR,
-          (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-           errmsg("[pllua]: functions cannot take type '%s'",
-          format_type_be(argtype[i]))));
-    fi->arg[i] = argtype[i];
+  fi->code_storage = code_storage;
+  if(!code_storage){
+      /* read arg types */
+      for (i = 0; i < nargs; i++) {
+        ti = luaP_gettypeinfo(L, argtype[i]);
+        if (ti->type == 'p') /* pseudo-type? */
+          ereport(ERROR,
+              (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+               errmsg("[pllua]: functions cannot take type '%s'",
+              format_type_be(argtype[i]))));
+        fi->arg[i] = argtype[i];
+      }
+      /* read result type */
+      ti = luaP_gettypeinfo(L, rettype);
+      if (ti->type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID)
+        ereport(ERROR,
+            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+             errmsg("[pllua]: functions cannot return type '%s'",
+               format_type_be(rettype))));
+  }else{
+      fi->arg[0] = INTERNALOID;
   }
-  /* read result type */
-  ti = luaP_gettypeinfo(L, rettype);
-  if (ti->type == 'p' && rettype != VOIDOID && rettype != TRIGGEROID)
-    ereport(ERROR,
-        (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-         errmsg("[pllua]: functions cannot return type '%s'",
-           format_type_be(rettype))));
   fi->vararg = rettype == TRIGGEROID; /* triggers are vararg */
   fi->result = rettype;
   fi->result_isset = isset;
@@ -647,10 +699,11 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   Form_pg_proc procst;
   bool isnull;
   Datum prosrc, *argname;
-  const char *s, *fname;
+  const char *source, *fname;
   text *t;
   luaL_Buffer b;
   int init = (*fi == NULL); /* not initialized? */
+  const char *chunk_name = PLLUA_CHUNKNAME;
   /* read proc info */
   procst = (Form_pg_proc) GETSTRUCT(proc);
   prosrc = SysCacheGetAttr(PROCOID, proc, Anum_pg_proc_prosrc, &isnull);
@@ -658,12 +711,12 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   nargs = procst->pronargs;
   /* get info userdata */
   if (init) {
-    lua_pushinteger(L, oid);
+    lua_push_oidstring(L, oid);
     *fi = luaP_newinfo(L, nargs, oid, procst);
   }
   lua_pushlightuserdata(L, (void *) *fi);
   /* check #argnames */
-  if (nargs > 0) {
+  if ((nargs > 0)&&((*fi)->code_storage == 0)) {
     int nnames;
     Datum argnames = SysCacheGetAttr(PROCOID, proc,
         Anum_pg_proc_proargnames, &isnull);
@@ -692,14 +745,16 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   luaL_addlstring(&b, fname, strlen(fname));
   luaL_addlstring(&b, "=function(", 10);
   /* read arg names */
-  if ((*fi)->vararg) luaL_addlstring(&b, "...", 3);
-  else {
-    int i;
-    for (i = 0; i < nargs; i++) {
-      if (i > 0) luaL_addchar(&b, ',');
-      t = DatumGetTextP(argname[i]);
-      luaL_addlstring(&b, VARDATA(t), VARSIZE(t) - VARHDRSZ);
-    }
+  if((*fi)->code_storage == 0){
+      if ((*fi)->vararg) luaL_addlstring(&b, "...", 3);
+      else {
+        int i;
+        for (i = 0; i < nargs; i++) {
+          if (i > 0) luaL_addchar(&b, ',');
+          t = DatumGetTextP(argname[i]);
+          luaL_addlstring(&b, VARDATA(t), VARSIZE(t) - VARHDRSZ);
+        }
+      }
   }
   luaL_addlstring(&b, ") ", 2);
   /* read source */
@@ -710,8 +765,18 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   luaL_addlstring(&b, fname, strlen(fname));
   /* create function */
   luaL_pushresult(&b);
-  s = lua_tostring(L, -1);
-  if (luaL_loadbuffer(L, s, strlen(s), PLLUA_CHUNKNAME))
+  source = lua_tostring(L, -1);
+
+
+  //check if remote debug
+  lua_pushlightuserdata(L, p_remote_debug_info);
+  lua_rawget(L, LUA_REGISTRYINDEX);
+  if  ((!lua_isnil(L,-1))&&lua_toboolean(L, -1)){
+      chunk_name = source;
+  }
+  lua_pop(L, 1);
+
+  if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
     luaP_error(L, "compile");
   lua_remove(L, -2); /* source */
   if (lua_pcall(L, 0, 1, 0)) luaP_error(L, "call");
@@ -735,7 +800,7 @@ static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
   proc = SearchSysCache(PROCOID, ObjectIdGetDatum((Oid) oid), 0, 0, 0);
   if (!HeapTupleIsValid(proc))
     elog(ERROR, "[pllua]: cache lookup failed for function %u", (Oid) oid);
-  lua_pushinteger(L, oid);
+  lua_push_oidstring(L, oid);
   lua_rawget(L, LUA_REGISTRYINDEX);
   if (lua_isnil(L, -1)) { /* not interned? */
     lua_pop(L, 1); /* nil */
@@ -828,7 +893,8 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       break;
     }
     default: {
-      luaP_Typeinfo *ti = luaP_gettypeinfo(L, type);
+      luaP_Typeinfo *ti;
+      ti = luaP_gettypeinfo(L, type);
       switch (ti->type) {
         case 'c': { /* complex? */
           HeapTupleHeader tup = DatumGetHeapTupleHeader(dat);
@@ -937,7 +1003,7 @@ static int luaP_getarraydims (lua_State *L, int *ndims, int *dims,
       }
       else {
         bool isnull;
-        Datum d = luaP_todatum(L, typeelem, typmod, &isnull);
+        Datum d = luaP_todatum(L, typeelem, typmod, &isnull, -1);
         Pointer v = DatumGetPointer(d);
         n = 0;
         if (ti->len == -1) /* varlena? */
@@ -967,7 +1033,7 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
     for (i = 0; i < (*dims); i++) {
       Pointer v;
       lua_rawgeti(L, -1, (*lb) + i);
-      v = DatumGetPointer(luaP_todatum(L, typeelem, typmod, &isnull));
+      v = DatumGetPointer(luaP_todatum(L, typeelem, typmod, &isnull, -1));
       if (!isnull) {
         *bitval |= *bitmask;
         if (ti->len > 0) {
@@ -1011,60 +1077,61 @@ static void luaP_toarray (lua_State *L, char **p, int ndims,
   }
 }
 
-Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
+Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
   Datum dat = 0; /* NULL */
-  *isnull = lua_isnil(L, -1);
+  *isnull = lua_isnil(L, idx);
   if (!(*isnull || type == VOIDOID)) {
     switch (type) {
       /* base and domain types */
       case BOOLOID:
-        dat = BoolGetDatum(lua_toboolean(L, -1));
+        dat = BoolGetDatum(lua_toboolean(L, idx));
         break;
       case FLOAT4OID:
-        dat = Float4GetDatum((float4) lua_tonumber(L, -1));
+        dat = Float4GetDatum((float4) lua_tonumber(L, idx));
         break;
       case FLOAT8OID:
-        dat = Float8GetDatum((float8) lua_tonumber(L, -1));
+        dat = Float8GetDatum((float8) lua_tonumber(L, idx));
         break;
       case INT2OID:
-        dat = Int16GetDatum(lua_tointeger(L, -1));
+        dat = Int16GetDatum(lua_tointeger(L, idx));
         break;
       case INT4OID:
-        dat = Int32GetDatum(lua_tointeger(L, -1));
+        dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
-        dat = Int64GetDatum(get64lua(L, -1));
+        dat = Int64GetDatum(get64lua(L, idx));
         break;
       case TEXTOID: {
-        const char *s = lua_tostring(L, -1);
+        const char *s = lua_tostring(L, idx);
         if (s == NULL) elog(ERROR,
             "[pllua]: string expected for datum conversion, got %s",
-            lua_typename(L, lua_type(L, -1)));
+            lua_typename(L, lua_type(L, idx)));
         dat = string2text(s);
         break;
       }
       case REFCURSOROID: {
-        Portal cursor = luaP_tocursor(L, -1);
+        Portal cursor = luaP_tocursor(L, idx);
         dat = string2text(cursor->name);
         break;
       }
       default: {
-        luaP_Typeinfo *ti = luaP_gettypeinfo(L, type);
+        luaP_Typeinfo *ti;
+        ti = luaP_gettypeinfo(L, type);
         switch (ti->type) {
           case 'c': /* complex? */
-            if (lua_type(L, -1) == LUA_TTABLE) {
+            if (lua_type(L, idx) == LUA_TTABLE) {
               int i;
               luaP_Buffer *b;
-              if (lua_type(L, -1) != LUA_TTABLE)
+              if (lua_type(L, idx) != LUA_TTABLE)
                 elog(ERROR, "[pllua]: table expected for record result, got %s",
-                    lua_typename(L, lua_type(L, -1)));
+                    lua_typename(L, lua_type(L, idx)));
               /* create tuple */
               b = luaP_getbuffer(L, ti->tupdesc->natts);
               for (i = 0; i < ti->tupdesc->natts; i++) {
-                lua_getfield(L, -1, NameStr(ti->tupdesc->attrs[i]->attname));
+                lua_getfield(L, idx, NameStr(ti->tupdesc->attrs[i]->attname));
                 /* only simple types allowed in record */
                 b->value[i] = luaP_todatum(L, ti->tupdesc->attrs[i]->atttypid,
-                    ti->tupdesc->attrs[i]->atttypmod, b->null + i);
+                    ti->tupdesc->attrs[i]->atttypmod, b->null + i, idx);
                 lua_pop(L, 1);
               }
               /* make copy in upper executor memory context */
@@ -1076,24 +1143,24 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
               if (tuple == NULL)
                 elog(ERROR,
                     "[pllua]: table or tuple expected for record result, got %s",
-                    lua_typename(L, lua_type(L, -1)));
+                    lua_typename(L, lua_type(L, idx)));
               dat = PointerGetDatum(SPI_returntuple(tuple, ti->tupdesc));
             }
             break;
           case 'b': /* base? */
           case 'd': /* domain? */
-            if (ti->elem != 0 && ti->len == -1) { /* array? */
+            if (ti->elem != 0 && ti->len == idx) { /* array? */
               luaP_Typeinfo *te;
               int ndims, dims[MAXDIM], lb[MAXDIM];
               int i, size;
               bool hasnulls;
               ArrayType *a;
-              if (lua_type(L, -1) != LUA_TTABLE)
+              if (lua_type(L, idx) != LUA_TTABLE)
                 elog(ERROR,
                     "[pllua]: table expected for array conversion, got %s",
-                    lua_typename(L, lua_type(L, -1)));
+                    lua_typename(L, lua_type(L, idx)));
               te = luaP_gettypeinfo(L, ti->elem);
-              for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = -1;
+              for (i = 0; i < MAXDIM; i++) dims[i] = lb[i] = idx;
               size = luaP_getarraydims(L, &ndims, dims, lb, te, ti->elem,
                   typmod, &hasnulls);
               if (size == 0) { /* empty array? */
@@ -1139,16 +1206,16 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
               dat = PointerGetDatum(a);
             }
             else {
-              luaP_Datum *d = luaP_toudata(L, -1, PLLUA_DATUM);
+              luaP_Datum *d = luaP_toudata(L, idx, PLLUA_DATUM);
               if (d == NULL) elog(ERROR,
                   "[pllua]: raw datum expected for datum conversion, got %s",
-                  lua_typename(L, lua_type(L, -1)));
+                  lua_typename(L, lua_type(L, idx)));
               dat = datumcopy(d->datum, ti);
             }
             break;
 #if PG_VERSION_NUM >= 80300
           case 'e': /* enum? */
-            dat = Int32GetDatum(lua_tointeger(L, -1));
+            dat = Int32GetDatum(lua_tointeger(L, idx));
             break;
 #endif
           case 'p': /* pseudo? */
@@ -1163,7 +1230,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull) {
 
 static Datum luaP_getresult (lua_State *L, FunctionCallInfo fcinfo,
     Oid type) {
-  Datum dat = luaP_todatum(L, type, 0, &fcinfo->isnull);
+  Datum dat = luaP_todatum(L, type, 0, &fcinfo->isnull, -1);
   lua_settop(L, 0);
   return dat;
 }
@@ -1210,6 +1277,9 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     elog(ERROR, "[pllua]: could not connect to SPI manager");
   istrigger = CALLED_AS_TRIGGER(fcinfo);
   fi = luaP_pushfunction(L, (int) fcinfo->flinfo->fn_oid);
+  if (fi->code_storage == 1){
+      luaL_error(L, "attempt to call non-callable function");
+  }
   if (fi->funcxt == NULL){
       fi->funcxt = rtds_initStack(L);
   }
@@ -1342,7 +1412,17 @@ Datum luaP_inlinehandler (lua_State *L, const char *source) {
   prev = rtds_set_current(funcxt);
   PG_TRY();
   {
-    if (luaL_loadbuffer(L, source, strlen(source), PLLUA_CHUNKNAME))
+      const char *chunk_name = PLLUA_CHUNKNAME;
+
+      lua_pushlightuserdata(L, p_remote_debug_info);
+      lua_rawget(L, LUA_REGISTRYINDEX);
+
+      if  ((!lua_isnil(L,-1))&&lua_toboolean(L, -1)){
+          chunk_name = source;
+      }
+      lua_pop(L, 1);
+
+    if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
       luaP_error(L, "compile");
     if (lua_pcall(L, 0, 0, 0)) {
         funcxt = rtds_unref(funcxt);

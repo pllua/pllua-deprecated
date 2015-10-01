@@ -6,6 +6,7 @@
 #include <fmgr.h>
 #include <funcapi.h>
 #include <access/heapam.h>
+#include <access/xact.h>
 #if PG_VERSION_NUM >= 90300
 #include <access/htup_details.h>
 #endif
@@ -46,7 +47,7 @@
 void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
 #endif
 
-#define PLLUA_VERSION "PL/Lua 1.0"
+#define PLLUA_VERSION "PL/Lua dev"
 
 #if defined(PLLUA_DEBUG)
 #include "pllua_debug.h"
@@ -58,16 +59,43 @@ void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
 #define ENDLUA
 #define ENDLUAV(v)
 #endif
+#define PLLUA_PG_CATCH_RETHROW(source_code)  do\
+{\
+    MemoryContext ____oldContext = CurrentMemoryContext;\
+    PG_TRY();\
+    {\
+        source_code\
+    }\
+    PG_CATCH();\
+    {\
+        push_spi_error(L, ____oldContext);\
+        lua_error(L);\
+    }PG_END_TRY();\
+}while(0)
 
+#define lua_push_oidstring(L, oid) do\
+{\
+    luaL_Buffer b;\
+    luaL_buffinit(L, &b);\
+    lua_pushinteger(L, oid);\
+    luaL_addstring(&b, "oid_");\
+    luaL_addvalue(&b);\
+    luaL_pushresult(&b);\
+}while(0)
+
+void push_spi_error(lua_State *L, MemoryContext oldcontext);
 /* get MemoryContext for state L */
 MemoryContext luaP_getmemctxt (lua_State *L);
 
 lua_State *pllua_getmaster (lua_State *L);
+
+#define lua_swap(L) lua_insert(L, -2)
 
 #define MTOLUA(state) {MemoryContext ___mcxt,___m;\
     ___mcxt = luaP_getmemctxt(state); \
     ___m  = MemoryContextSwitchTo(___mcxt)
 
 #define MTOPG MemoryContextSwitchTo(___m);}
+int pg_to_regtype(char *typ_name);
 
 #endif // PLLUACOMMON_H
