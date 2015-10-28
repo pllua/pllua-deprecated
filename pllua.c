@@ -22,10 +22,13 @@ Datum pllua_inline_handler(PG_FUNCTION_ARGS);
 Datum plluau_inline_handler(PG_FUNCTION_ARGS);
 #endif
 
+#include "pllua_xact_cleanup.h"
 PG_FUNCTION_INFO_V1(_PG_init);
 Datum _PG_init(PG_FUNCTION_ARGS) {
+  pllua_init_common_ctx();
   L[0] = luaP_newstate(0); /* untrusted */
   L[1] = luaP_newstate(1); /* trusted */
+  RegisterXactCallback(pllua_xact_cb, NULL);
   PG_RETURN_VOID();
 }
 
@@ -33,6 +36,7 @@ PG_FUNCTION_INFO_V1(_PG_fini);
 Datum _PG_fini(PG_FUNCTION_ARGS) {
   luaP_close(L[0]);
   luaP_close(L[1]);
+  pllua_delete_common_ctx();
   PG_RETURN_VOID();
 }
 
@@ -74,6 +78,19 @@ Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
 
 void p_lua_mem_cxt(void){}
 void p_lua_master_state(void){}
+void p_remote_debug_info(void){}
+
+
+void push_spi_error(lua_State *L, MemoryContext oldcontext)
+{
+    ErrorData  *edata;
+    /* Save error info */
+    MemoryContextSwitchTo(oldcontext);
+    edata = CopyErrorData();
+    FlushErrorState();
+    lua_pushstring(L, edata->message);
+    FreeErrorData(edata);
+}
 
 MemoryContext luaP_getmemctxt(lua_State *L) {
     MemoryContext mcxt;
@@ -106,5 +123,19 @@ void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
     lua_pop(L, nup);  /* remove upvalues */
 }
 
+int pg_to_regtype(char *typ_name)
+{
 
+    Oid			result;
+    int32		typmod;
 
+    /*
+     * Invoke the full parser to deal with special cases such as array syntax.
+     */
+    parseTypeString(typ_name, &result, &typmod, true);
+
+    if (OidIsValid(result))
+        return result;
+    else
+        return -1;
+}
