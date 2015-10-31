@@ -793,7 +793,7 @@ static int luaP_executeplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   bool ro = (bool) lua_toboolean(L, 3);
   long c = luaL_optlong(L, 4, 0);
-  int result;
+  int result = -1;
   Datum *values = NULL;
   char *nulls = NULL;
 
@@ -850,7 +850,7 @@ static int luaP_getcursorplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   bool ro = (bool) lua_toboolean(L, 3);
   const char *name = lua_tostring(L, 4);
-  Portal cursor;
+  Portal cursor = NULL;
   Datum *values = NULL;
   char *nulls = NULL;
   if (SPI_is_cursor_plan(p->plan)) {
@@ -875,7 +875,7 @@ static int luaP_getcursorplan (lua_State *L) {
 
 static int luaP_rowsplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
-  Portal cursor;
+  Portal cursor = NULL;
   Datum *values = NULL;
   char *nulls = NULL;
   if (!SPI_is_cursor_plan(p->plan))
@@ -958,7 +958,7 @@ static int luaP_prepare (lua_State *L) {
 }
 
 static int luaP_execute (lua_State *L) {
-  int result;
+  int result = -1;
   PLLUA_PG_CATCH_RETHROW(
     result = SPI_execute(luaL_checkstring(L, 1),
                          (bool) lua_toboolean(L, 2),

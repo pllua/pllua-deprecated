@@ -211,7 +211,7 @@ int get_pgfunc(lua_State *L)
     Lua_pgfunc *lf;
     MemoryContext mcxt;
     MemoryContext m;
-    const char* reg_name;
+    const char* reg_name = NULL;
     HeapTuple	proctup;
 
     Form_pg_proc proc;
@@ -227,18 +227,20 @@ int get_pgfunc(lua_State *L)
     if(lua_type(L, 1) == LUA_TSTRING){
         reg_name = luaL_checkstring(L, 1);
 
-    PG_TRY();
-    {
-        funcid = DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum(reg_name)));
-    }
-    PG_CATCH();{}
-    PG_END_TRY();
+        PG_TRY();
+        {
+            funcid = DatumGetObjectId(DirectFunctionCall1(regprocedurein, CStringGetDatum(reg_name)));
+        }
+        PG_CATCH();{}
+        PG_END_TRY();
     }else if (lua_type(L, 1) == LUA_TNUMBER){
         funcid = luaL_checkinteger(L, 1);
     }
 
     if (!OidIsValid(funcid)){
-        return luaL_error(L,"failed to register %s", reg_name);
+        if (reg_name)
+            return luaL_error(L,"failed to register %s", reg_name);
+        return luaL_error(L,"failed to register function with oid %d", funcid);
     }
 
     proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(funcid));
