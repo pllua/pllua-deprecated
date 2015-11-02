@@ -470,26 +470,6 @@ static int luaP_fromstring (lua_State *L) {
   return 1;
 }
 
-static int luaP_remote_debug_info (lua_State *L) {
-    BEGINLUA;
-    if ((lua_gettop(L) != 1)||(!lua_isboolean( L, 1 ))){
-        return luaL_error(L, "wrong arguments lentgh/type");
-    }
-    lua_pushlightuserdata(L, p_remote_debug_info);
-    lua_rawget(L, LUA_REGISTRYINDEX);
-    if (lua_isnil(L,-1)){
-        return luaL_error(L, "trusted lua does not support debugging");
-    }
-    lua_pop(L, 1);
-
-    lua_pushlightuserdata(L, p_remote_debug_info);
-    lua_swap(L);
-    lua_rawset(L, LUA_REGISTRYINDEX);
-
-    ENDLUAV(-1);
-    return -1;
-}
-
 static const luaL_Reg luaP_funcs[] = {
   {"setshared", luaP_setshared},
   {"log", luaP_log},
@@ -500,7 +480,6 @@ static const luaL_Reg luaP_funcs[] = {
   {"fromstring", luaP_fromstring},
   {"pgfunc", get_pgfunc},
   {"subtransaction", use_subtransaction},
-  {"remote_debug_info", luaP_remote_debug_info},
   {NULL, NULL}
 };
 
@@ -530,11 +509,6 @@ lua_State *luaP_newstate (int trusted) {
   lua_pushlightuserdata(L, (void *) L);
   lua_rawset(L, LUA_REGISTRYINDEX);
 
-  if(!trusted){
-      lua_pushlightuserdata(L, p_remote_debug_info);
-      lua_pushboolean(L, false);
-      lua_rawset(L, LUA_REGISTRYINDEX);
-  }
   /* core libs */
   if (trusted) {
     const luaL_Reg luaP_trusted_libs[] = {
@@ -768,13 +742,10 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   source = lua_tostring(L, -1);
 
 
-  //check if remote debug
-  lua_pushlightuserdata(L, p_remote_debug_info);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  if  ((!lua_isnil(L,-1))&&lua_toboolean(L, -1)){
+#if defined(PLLUA_DEBUG)
       chunk_name = source;
-  }
-  lua_pop(L, 1);
+#endif
+
 
   if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
     luaP_error(L, "compile");
@@ -1414,25 +1385,21 @@ Datum luaP_inlinehandler (lua_State *L, const char *source) {
   {
       const char *chunk_name = PLLUA_CHUNKNAME;
 
-      lua_pushlightuserdata(L, p_remote_debug_info);
-      lua_rawget(L, LUA_REGISTRYINDEX);
-
-      if  ((!lua_isnil(L,-1))&&lua_toboolean(L, -1)){
-          chunk_name = source;
-      }
-      lua_pop(L, 1);
-
-    if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
-      luaP_error(L, "compile");
-    if (lua_pcall(L, 0, 0, 0)) {
-        funcxt = rtds_unref(funcxt);
-        rtds_set_current(prev);
 #if defined(PLLUA_DEBUG)
-        luaP_error(L, getLINE());
-#else
-        luaP_error(L, "runtime");
+      chunk_name = source;
 #endif
-    }
+
+      if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
+          luaP_error(L, "compile");
+      if (lua_pcall(L, 0, 0, 0)) {
+          funcxt = rtds_unref(funcxt);
+          rtds_set_current(prev);
+#if defined(PLLUA_DEBUG)
+          luaP_error(L, getLINE());
+#else
+          luaP_error(L, "runtime");
+#endif
+      }
 
   }
   PG_CATCH();
