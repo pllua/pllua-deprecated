@@ -11,9 +11,8 @@
 
 /*used as a key for saving lua context lua_pushlightuserdata(p_lua_mem_cxt)
   instead of lua_pushlightuserdata((void*)L) (in SRF the L is a lua_newthread)  */
-void p_lua_mem_cxt(void);
-
-void p_lua_master_state(void);
+int p_lua_mem_cxt(void);
+int p_lua_master_state(void);
 
 typedef struct luaP_Buffer {
   int size;

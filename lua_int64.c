@@ -30,8 +30,10 @@ source:https://github.com/idning/lua-int64.git
 #include <stdint.h>
 #include <math.h>
 #include <stdlib.h>
+#ifndef _MSC_VER
 #include <stdbool.h>
 #include <inttypes.h>
+#endif
 
 #include "pllua.h"
 static const char int64_type_name[] = "int64";
@@ -43,15 +45,16 @@ static int64_t check_int64(lua_State* L, int idx) {\
     return p ? *p : 0;
 }
 
-#define get_ab_values     int64_t a;\
+#define get_ab_values  \
+    int64_t a;\
     int64_t b;\
     if(lua_isnil(L,1) || lua_isnil(L,2)) \
     return luaL_error(L, "attempt to perform arithmetic on a nil value"); \
-    a = _int64(L,1); \
-    b = _int64(L,2)
+    a = get_int64(L,1); \
+    b = get_int64(L,2)
 
 static int64_t
-_int64(lua_State *L, int index) {
+get_int64(lua_State *L, int index) {
     int type = lua_type(L,index);
     int64_t value = 0;
 
@@ -60,7 +63,12 @@ _int64(lua_State *L, int index) {
         return (int64_t)(luaL_checknumber(L,index));
     }
     case LUA_TSTRING: {
-        return(int64_t)strtoll(lua_tostring(L, index), NULL, 0);
+
+#ifdef  _MSC_VER
+            return(int64_t)_strtoi64(lua_tostring(L, index), NULL, 0);
+#else
+            return(int64_t)strtoll(lua_tostring(L, index), NULL, 0);
+#endif
     }
     case LUA_TUSERDATA:
         value = check_int64(L, index);
@@ -99,7 +107,7 @@ int64_new(lua_State *L) {
         _pushint64(L,0);
         break;
     case 1 :
-        n = _int64(L,1);
+        n = get_int64(L,1);
         lua_pop(L, 1);
         _pushint64(L,n);
         break;
@@ -110,7 +118,12 @@ int64_new(lua_State *L) {
             luaL_error(L, "base must be >= 2");
         }
         str = luaL_checkstring(L, 1);
-        n = strtoll(str, NULL, base);
+#ifdef  _MSC_VER
+            n = _strtoi64(str, NULL, base);
+#else
+            n = strtoll(str, NULL, base);
+#endif
+
         _pushint64(L,n);
         break;
     }
@@ -187,7 +200,7 @@ int64_pow(lua_State *L) {
 
 static int
 int64_unm(lua_State *L) {
-    int64_t a = _int64(L,1);
+    int64_t a = get_int64(L,1);
     _pushint64(L, -a);
     return 1;
 }
@@ -215,7 +228,7 @@ int64_le(lua_State *L) {
 
 static int
 int64_len(lua_State *L) {
-    int64_t a = _int64(L,1);
+    int64_t a = get_int64(L,1);
     lua_pushnumber(L,(lua_Number)a);
     return 1;
 }
@@ -227,7 +240,11 @@ tostring(lua_State *L) {
     int64_t n = check_int64(L,1);
     if (lua_gettop(L) == 1) {
         char str[24];
-        sprintf(str, "%"PRId64, n);
+#ifndef _MSC_VER
+        sprintf(str, "%" PRId64, n);
+#else
+        sprintf(str,"%10lld", (long long)n);
+#endif
         lua_pushstring(L,str);
     } else {
         int i;
@@ -337,7 +354,7 @@ void register_int64(lua_State *L)
 
 int64 get64lua(lua_State *L, int index)
 {
-    return _int64(L,index);
+    return get_int64(L,index);
 }
 
 

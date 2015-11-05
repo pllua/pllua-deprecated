@@ -194,7 +194,7 @@ static luaP_Tuple* tq_dequeue(TupleQueuePtr Q) {
 static int luaP_rowsaux (lua_State *L) {
     luaP_Cursor *c;
     luaP_Tuple* t;
-    int i;
+    unsigned int i;
     uint32		processed = 0;
 
     BEGINLUA;
@@ -388,7 +388,7 @@ static int luaP_p_tupleindex (lua_State *L) {
     luaP_Tuple *t = *(luaP_Tuple **) lua_touserdata(L, 1);
 
     if (lua_type(L, 2) == LUA_TNUMBER){
-        i = lua_tonumber(L, 2);
+        i = (int)lua_tonumber(L, 2);
         if (t->rtupdesc){
             TupleDesc tupleDesc = rtupdesc_gettup(t->rtupdesc);
             i= i-1; //Lua[1] == C[0]

@@ -11,15 +11,15 @@ PG_MODULE_MAGIC;
 
 static lua_State *L[2] = {NULL, NULL}; /* Lua VMs */
 
-Datum _PG_init(PG_FUNCTION_ARGS);
-Datum _PG_fini(PG_FUNCTION_ARGS);
-Datum pllua_validator(PG_FUNCTION_ARGS);
-Datum pllua_call_handler(PG_FUNCTION_ARGS);
-Datum plluau_validator(PG_FUNCTION_ARGS);
-Datum plluau_call_handler(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum _PG_init(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum _PG_fini(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum pllua_validator(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum pllua_call_handler(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plluau_validator(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plluau_call_handler(PG_FUNCTION_ARGS);
 #if PG_VERSION_NUM >= 90000
-Datum pllua_inline_handler(PG_FUNCTION_ARGS);
-Datum plluau_inline_handler(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum pllua_inline_handler(PG_FUNCTION_ARGS);
+PGDLLEXPORT Datum plluau_inline_handler(PG_FUNCTION_ARGS);
 #endif
 
 #include "pllua_xact_cleanup.h"
@@ -75,9 +75,15 @@ Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
 }
 #endif
 
+/* p_lua_mem_cxt and p_lua_master_state addresses used as keys for storing
+ * values in lua states. In case when this functions are equal then
+ * visual studio compiler with default settings "optimize" it and as
+ * result both functions have equal addresses which make them unusable as keys,
+ * thats why return 1; return 2;
+*/
 
-void p_lua_mem_cxt(void){}
-void p_lua_master_state(void){}
+int p_lua_mem_cxt(void){return 2;}
+int p_lua_master_state(void){return 1;}
 
 
 void push_spi_error(lua_State *L, MemoryContext oldcontext)
@@ -95,7 +101,7 @@ MemoryContext luaP_getmemctxt(lua_State *L) {
     MemoryContext mcxt;
     lua_pushlightuserdata(L, p_lua_mem_cxt);
     lua_rawget(L, LUA_REGISTRYINDEX);
-    mcxt = (MemoryContext) lua_touserdata(L, -1);
+    mcxt = lua_touserdata(L, -1);
     lua_pop(L, 1);
     return mcxt;
 }
@@ -131,7 +137,13 @@ int pg_to_regtype(char *typ_name)
     /*
      * Invoke the full parser to deal with special cases such as array syntax.
      */
-    parseTypeString(typ_name, &result, &typmod, true);
+
+#if PG_VERSION_NUM < 90400
+           parseTypeString(typ_name, &result, &typmod);
+#else
+            parseTypeString(typ_name, &result, &typmod, true);
+#endif
+
 
     if (OidIsValid(result))
         return result;
