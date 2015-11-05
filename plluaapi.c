@@ -363,7 +363,7 @@ static int luaP_modinit (lua_State *L) {
     else {
       status = 0;
       if (SPI_processed > 0) { /* any rows? */
-        int i;
+        unsigned int i;
         for (i = 0; i < SPI_processed; i++) {
           bool isnull;
           /* push module name */
