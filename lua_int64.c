@@ -36,6 +36,8 @@ source:https://github.com/idning/lua-int64.git
 #endif
 
 #include "pllua.h"
+#include "pllua_errors.h"
+
 static const char int64_type_name[] = "int64";
 
 static int64_t check_int64(lua_State* L, int idx) {\

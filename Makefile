@@ -34,7 +34,8 @@ REGRESS = \
 plluatest \
 biginttest \
 pgfunctest \
-subtransaction
+subtransaction \
+error_info
 
 OBJS = \
 pllua.o \
@@ -46,7 +47,8 @@ lua_int64.o \
 rtupdesc.o \
 rtupdescstk.o \
 pllua_pgfunc.o \
-pllua_subxact.o
+pllua_subxact.o \
+pllua_errors.o
 
 PG_CPPFLAGS = -I$(LUA_INCDIR) #-DPLLUA_DEBUG
 SHLIB_LINK = $(LUALIB)

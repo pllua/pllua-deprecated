@@ -7,6 +7,8 @@
 #include <catalog/pg_language.h>
 #include <lib/stringinfo.h>
 
+#include "pllua_errors.h"
+
 static const char pg_func_type_name[] = "pg_func";
 
 static Oid find_lang_oids(const char* lang){
@@ -202,9 +204,7 @@ static lua_CFunction pg_callable_funcs[] =
     NULL
 };
 
-#define luaP_getfield(L, s) \
-    lua_pushlightuserdata((L), (void *)(s)); \
-    lua_rawget((L), LUA_REGISTRYINDEX)
+
 
 int get_pgfunc(lua_State *L)
 {

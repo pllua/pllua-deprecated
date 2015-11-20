@@ -6,10 +6,29 @@
  */
 
 #include "pllua.h"
+#include "pllua_errors.h"
 
 PG_MODULE_MAGIC;
 
-static lua_State *L[2] = {NULL, NULL}; /* Lua VMs */
+static lua_State *LuaVM[2] = {NULL, NULL}; /* Lua VMs */
+
+LVMInfo lvm_info[2];
+
+static void init_vmstructs(){
+  LVMInfo lvm0;
+  LVMInfo lvm1;
+
+  lvm0.name = "untrusted";
+  lvm0.hasTraceback = 0;
+
+  lvm1.name = "trusted";
+  lvm1.hasTraceback = 0;
+
+  lvm_info[0] = lvm0;
+  lvm_info[1] = lvm1;
+}
+
+
 
 PGDLLEXPORT Datum _PG_init(PG_FUNCTION_ARGS);
 PGDLLEXPORT Datum _PG_fini(PG_FUNCTION_ARGS);
@@ -25,39 +44,42 @@ PGDLLEXPORT Datum plluau_inline_handler(PG_FUNCTION_ARGS);
 #include "pllua_xact_cleanup.h"
 PG_FUNCTION_INFO_V1(_PG_init);
 Datum _PG_init(PG_FUNCTION_ARGS) {
+  init_vmstructs();
   pllua_init_common_ctx();
-  L[0] = luaP_newstate(0); /* untrusted */
-  L[1] = luaP_newstate(1); /* trusted */
+  LuaVM[0] = luaP_newstate(0); /* untrusted */
+  LuaVM[1] = luaP_newstate(1); /* trusted */
   RegisterXactCallback(pllua_xact_cb, NULL);
   PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(_PG_fini);
 Datum _PG_fini(PG_FUNCTION_ARGS) {
-  luaP_close(L[0]);
-  luaP_close(L[1]);
+  luaP_close(LuaVM[0]);
+  luaP_close(LuaVM[1]);
   pllua_delete_common_ctx();
   PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(plluau_validator);
 Datum plluau_validator(PG_FUNCTION_ARGS) {
-  return luaP_validator(L[0], PG_GETARG_OID(0));
+  return luaP_validator(LuaVM[0], PG_GETARG_OID(0));
 }
 
 PG_FUNCTION_INFO_V1(plluau_call_handler);
 Datum plluau_call_handler(PG_FUNCTION_ARGS) {
-  return luaP_callhandler(L[0], fcinfo);
+  lvm_info[0].hasTraceback = false;
+  return luaP_callhandler(LuaVM[0], fcinfo);
 }
 
 PG_FUNCTION_INFO_V1(pllua_validator);
 Datum pllua_validator(PG_FUNCTION_ARGS) {
-  return luaP_validator(L[1], PG_GETARG_OID(0));
+  return luaP_validator(LuaVM[1], PG_GETARG_OID(0));
 }
 
 PG_FUNCTION_INFO_V1(pllua_call_handler);
 Datum pllua_call_handler(PG_FUNCTION_ARGS) {
-  return luaP_callhandler(L[1], fcinfo);
+  lvm_info[1].hasTraceback =  false;
+  return luaP_callhandler(LuaVM[1], fcinfo);
 }
 
 #if PG_VERSION_NUM >= 90000
@@ -66,12 +88,14 @@ Datum pllua_call_handler(PG_FUNCTION_ARGS) {
 
 PG_FUNCTION_INFO_V1(plluau_inline_handler);
 Datum plluau_inline_handler(PG_FUNCTION_ARGS) {
-  return luaP_inlinehandler(L[0], CODEBLOCK);
+  lvm_info[0].hasTraceback = false;
+  return luaP_inlinehandler(LuaVM[0], CODEBLOCK);
 }
 
 PG_FUNCTION_INFO_V1(pllua_inline_handler);
 Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
-  return luaP_inlinehandler(L[1], CODEBLOCK);
+  lvm_info[1].hasTraceback = false;
+  return luaP_inlinehandler(LuaVM[1], CODEBLOCK);
 }
 #endif
 
@@ -85,17 +109,7 @@ Datum pllua_inline_handler(PG_FUNCTION_ARGS) {
 int p_lua_mem_cxt(void){return 2;}
 int p_lua_master_state(void){return 1;}
 
-
-void push_spi_error(lua_State *L, MemoryContext oldcontext)
-{
-    ErrorData  *edata;
-    /* Save error info */
-    MemoryContextSwitchTo(oldcontext);
-    edata = CopyErrorData();
-    FlushErrorState();
-    lua_pushstring(L, edata->message);
-    FreeErrorData(edata);
-}
+//------------------------------------------------------------------------------------------------------
 
 MemoryContext luaP_getmemctxt(lua_State *L) {
     MemoryContext mcxt;
@@ -113,6 +127,12 @@ lua_State * pllua_getmaster(lua_State *L) {
     master = (lua_State *) lua_touserdata(L, -1);
     lua_pop(L, 1);
     return master;
+}
+
+int pllua_getmaster_index(lua_State *L) {
+    if (pllua_getmaster(L) == LuaVM[0])
+      return 0;
+    return 1;
 }
 
 void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {

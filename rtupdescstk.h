@@ -24,6 +24,7 @@ typedef struct stackType {
     lua_State *L;
     RTDNodePtr top;
     void *resptr;
+    struct stackType **cleanup_ptr; /*func ptr to this struct*/
 } RTupDescStackType, *RTupDescStack;
 
 RTupDescStack rtds_set_current(void *s);
@@ -33,6 +34,7 @@ int rtds_get_length(RTupDescStack S);
 
 
 RTupDescStack rtds_initStack(lua_State *L);
+RTupDescStack rtds_initStack_weak(lua_State *L, RTupDescStack *wp);
 
 int rtds_isempty(RTupDescStack S);
 
