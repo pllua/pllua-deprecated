@@ -595,7 +595,7 @@ PL/Lua is distributed as a source package and can be obtained at [PgFoundry][22]
 
 ```
     $ export PG_CONFIG='/usr/pgsql-9.4/bin/pg_config' # specifiy where pg_config is located
-    $ make && sudo make install
+    $ make && make install
     $ psql -c "CREATE EXTENSION pllua" mydb
 ```
 
