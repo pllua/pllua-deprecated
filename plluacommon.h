@@ -59,19 +59,7 @@ void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
 #define ENDLUA
 #define ENDLUAV(v)
 #endif
-#define PLLUA_PG_CATCH_RETHROW(source_code)  do\
-{\
-    MemoryContext ____oldContext = CurrentMemoryContext;\
-    PG_TRY();\
-    {\
-        source_code\
-    }\
-    PG_CATCH();\
-    {\
-        push_spi_error(L, ____oldContext);\
-        lua_error(L);\
-    }PG_END_TRY();\
-}while(0)
+
 
 #define lua_push_oidstring(L, oid) do\
 {\
@@ -83,13 +71,22 @@ void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
     luaL_pushresult(&b);\
 }while(0)
 
-void push_spi_error(lua_State *L, MemoryContext oldcontext);
+typedef struct {
+    const char* name;
+    bool hasTraceback;
+} LVMInfo;
+
 /* get MemoryContext for state L */
 MemoryContext luaP_getmemctxt (lua_State *L);
 
 lua_State *pllua_getmaster (lua_State *L);
+int pllua_getmaster_index(lua_State *L);
 
 #define lua_swap(L) lua_insert(L, -2)
+
+#define luaP_getfield(L, s) \
+    lua_pushlightuserdata((L), (void *)(s)); \
+    lua_rawget((L), LUA_REGISTRYINDEX)
 
 #define MTOLUA(state) {MemoryContext ___mcxt,___m;\
     ___mcxt = luaP_getmemctxt(state); \

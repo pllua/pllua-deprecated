@@ -67,9 +67,14 @@ int rtds_isempty(RTupDescStack S) {
     return (S -> top == NULL);
 }
 
-static void force_free(void *d){
+static void force_free(/*RTupDescStack*/void *d){
+    RTupDescStack p;
     if (d == NULL) return;
-    clean(d);
+    p = d;
+    if (p->cleanup_ptr){
+        (*p->cleanup_ptr) = NULL;
+    }
+    clean(p);
     pfree(d);
 }
 
@@ -81,6 +86,21 @@ RTupDescStack rtds_initStack(lua_State *L) {
     MTOPG;
     sp->ref_count = 0;
     sp->L = L;
+    sp->top = NULL;
+    sp->resptr = register_resource(sp, force_free);
+    sp->cleanup_ptr = NULL;
+    return sp;
+}
+
+RTupDescStack rtds_initStack_weak(lua_State *L, RTupDescStack* wp) {
+    RTupDescStack sp;
+    L = pllua_getmaster(L);
+    MTOLUA(L);
+    sp = (RTupDescStack) palloc(sizeof(RTupDescStackType));
+    MTOPG;
+    sp->ref_count = 0;
+    sp->L = L;
+    sp->cleanup_ptr = wp;
     sp->top = NULL;
     sp->resptr = register_resource(sp, force_free);
     return sp;

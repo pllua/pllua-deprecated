@@ -13,5 +13,7 @@
 #include <postgres.h>
 
 int use_subtransaction(lua_State * L);
+int subt_luaB_pcall (lua_State *L);
+int subt_luaB_xpcall (lua_State *L);
 
 #endif // PLLUA_SUBXACT_H

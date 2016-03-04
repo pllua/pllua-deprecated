@@ -31,7 +31,21 @@ $$ LANGUAGE pllua;
 select pg_temp.sub_test();
  sub_test 
 ----------
- nil
+ false
  true
 (2 rows)
 
+do $$
+local status, result = subtransaction(function() 
+server.execute('select 1,'); -- < special SQL syntax error
+end);
+print (status, result)
+status, result = pcall(function() 
+server.execute('select 1,'); -- < special SQL syntax error
+end);
+print (status, result)
+print ('done')
+$$ language pllua;
+INFO:  false	syntax error at end of input
+INFO:  false	syntax error at end of input
+INFO:  done

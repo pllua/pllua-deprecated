@@ -7,6 +7,8 @@
 
 #include "pllua.h"
 #include "pllua_xact_cleanup.h"
+#include "pllua_errors.h"
+
 #ifndef SPI_prepare_cursor
 #define SPI_prepare_cursor(cmd, nargs, argtypes, copts) \
   SPI_prepare(cmd, nargs, argtypes)
@@ -207,7 +209,11 @@ static int luaP_rowsaux (lua_State *L) {
 
     if (c->tupleQueue == NULL){
 
-        SPI_cursor_fetch(c->cursor, 1, FETCH_CSR_Q);
+
+    PLLUA_PG_CATCH_RETHROW(
+      SPI_cursor_fetch(c->cursor, 1, FETCH_CSR_Q);
+		);
+
         if (SPI_processed == 0){
             SPI_freetuptable(SPI_tuptable);
             c->rtupdesc = rtupdesc_unref(c->rtupdesc);

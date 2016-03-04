@@ -29,3 +29,14 @@ RETURNS SETOF text AS $$
   coroutine.yield(tostring(status))
 $$ LANGUAGE pllua;
 select pg_temp.sub_test();
+do $$
+local status, result = subtransaction(function() 
+server.execute('select 1,'); -- < special SQL syntax error
+end);
+print (status, result)
+status, result = pcall(function() 
+server.execute('select 1,'); -- < special SQL syntax error
+end);
+print (status, result)
+print ('done')
+$$ language pllua;

@@ -1,0 +1,119 @@
+do $$ 
+local testfunc = function () error("my error") end
+local f = function()
+	local status, err = pcall(testfunc)
+	if (err) then
+		error(err)
+	end
+end
+f()
+$$language pllua;
+ERROR:  my error
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'error'
+	[string "anonymous"]:6: in function 'f'
+	[string "anonymous"]:9: in main chunk
+create or replace function pg_temp.function_with_error() returns integer as $$
+	local testfunc = function () error("my error") end
+	local f = function()
+		local status, err = pcall(testfunc)
+		if (err) then
+			error(err)
+		end
+	end
+	f()
+$$language plluau;
+create or replace function pg_temp.second_function() returns void as $$
+	for k in server.rows('select pg_temp.function_with_error()') do
+	end
+$$language plluau;
+do $$ 
+	server.execute('select pg_temp.second_function()') 
+$$language pllua;
+ERROR:  my error
+CONTEXT:  
+stack traceback(untrusted):
+	[C]: in function 'error'
+	[string "function_with_error"]:6: in function 'f'
+	[string "function_with_error"]:9: in function <[string "function_with_error"]:1>
+	[C]: in function '(for generator)'
+	[string "second_function"]:2: in function <[string "second_function"]:1>
+SQL statement "select pg_temp.second_function()"
+SQL statement "select pg_temp.second_function()"
+stack traceback(trusted):
+	[C]: in function 'execute'
+	[string "anonymous"]:2: in main chunk
+do $$
+local status, err = subtransaction(function() assert(1==2) end)
+if (err) then
+    error(err)
+end
+$$language pllua;
+ERROR:  assertion failed!
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'error'
+	[string "anonymous"]:4: in main chunk
+do $$
+info({message="info message", hint="info hint", detail="info detail"})
+$$language pllua;
+INFO:  info message
+DETAIL:  info detail
+HINT:  info hint
+do $$
+info("info message")
+$$language pllua;
+INFO:  info message
+do $$
+warning({message="warning message", hint="warning hint", detail="warning detail"})
+$$language pllua;
+WARNING:  warning message
+DETAIL:  warning detail
+HINT:  warning hint
+do $$
+warning("warning message")
+$$language pllua;
+WARNING:  warning message
+do $$
+error({message="error message", hint="error hint", detail="error detail"})
+$$language pllua;
+ERROR:  error message
+DETAIL:  error detail
+HINT:  error hint
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'error'
+	[string "anonymous"]:2: in main chunk
+do $$
+error("error message")
+$$language pllua;
+ERROR:  error message
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'error'
+	[string "anonymous"]:2: in main chunk
+do $$
+info()
+$$language pllua;
+ERROR:  [string "anonymous"]:2: bad argument #1 to 'info' (string expected, got no value)
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'info'
+	[string "anonymous"]:2: in main chunk
+do $$
+warning()
+$$language pllua;
+ERROR:  [string "anonymous"]:2: bad argument #1 to 'warning' (string expected, got no value)
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'warning'
+	[string "anonymous"]:2: in main chunk
+do $$
+error()
+$$language pllua;
+ERROR:  [string "anonymous"]:2: no exception data
+CONTEXT:  
+stack traceback(trusted):
+	[C]: in function 'error'
+	[string "anonymous"]:2: in main chunk

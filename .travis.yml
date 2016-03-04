@@ -1,6 +1,4 @@
 before_install:
-  - sudo apt-get install $LUA
-  - sudo apt-get install $LUA_DEV
   - psql --version
   - sudo /etc/init.d/postgresql stop
   - sudo apt-get -y --purge remove postgresql libpq-dev libpq5 postgresql-client-common postgresql-common
@@ -15,6 +13,8 @@ before_install:
   - sudo echo "host    all         all         127.0.0.1/32          trust" >> /etc/postgresql/$PGVERSION/main/pg_hba.conf
   - sudo echo "host    all         all         ::1/128               trust" >> /etc/postgresql/$PGVERSION/main/pg_hba.conf
   - sudo /etc/init.d/postgresql restart
+  - sudo apt-get install $LUA
+  - sudo apt-get install $LUA_DEV
 
 before_script:
   - createuser -U postgres -s travis
