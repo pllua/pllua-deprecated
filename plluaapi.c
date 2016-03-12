@@ -319,7 +319,7 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
     lua_newtable(L);
     for (i = 0; i < tdata->tg_trigger->tgnargs; i++) {
       lua_pushstring(L, tdata->tg_trigger->tgargs[i]);
-      lua_rawseti(L, -2, (i+1));
+      lua_rawseti(L, -2, i);
     }
     lua_setfield(L, -2, "args");
   }
