@@ -511,6 +511,7 @@ Triggers can be defined in PL/Lua as usual by just creating a function returning
 |  `relation` |  Lua table describing the relation with keys: `name` is relation name (string), `namespace` is the relation schema name (string), `attributes` is a table with relation attributes as string keys  |
 |  `row` |  Tuple representing the row-level trigger's target: in update operations holds the _new_ row, otherwise holds the _old_ row. `row` is `nil` in statement-level triggers.  |
 |  `old` |  Tuple representing the old row in an update before row-level operation.  |
+|  `args` |  In case arguments are set when executing the procedure, _args_ table will contain the arguments starting at index 0 and converted to strings. |
 
 Example content of a `trigger` table after an update operation :
 ```lua
@@ -528,6 +529,9 @@ trigger = {
       },
       ["name"] = "table_name",
       ["oid"] = 59059
+   },
+   ["args"] = {
+      [0] = "test"
    }
 }
 ```
