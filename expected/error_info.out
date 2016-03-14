@@ -37,7 +37,7 @@ stack traceback(untrusted):
 	[C]: in function 'error'
 	[string "function_with_error"]:6: in function 'f'
 	[string "function_with_error"]:9: in function <[string "function_with_error"]:1>
-	[C]: in function '(for generator)'
+	[C]: in function 'for iterator'
 	[string "second_function"]:2: in function <[string "second_function"]:1>
 SQL statement "select pg_temp.second_function()"
 SQL statement "select pg_temp.second_function()"
