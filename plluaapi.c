@@ -6,7 +6,6 @@
 
 #include "pllua.h"
 #include "rowstamp.h"
-#include "lua_int64.h"
 #include "rtupdescstk.h"
 
 #include "pllua_pgfunc.h"
@@ -553,7 +552,6 @@ lua_State *luaP_newstate (int trusted) {
 
   register_error_mt(L);
   register_funcinfo_mt(L);
-  register_int64(L);
   /* setup typeinfo and raw datum MTs */
   lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
   lua_newtable(L); /* luaP_Typeinfo MT */
@@ -848,8 +846,8 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat));
       break;
     case INT8OID:
-        setInt64lua(L,(DatumGetInt64(dat)));
-        break;
+      lua_pushinteger(L, (lua_Integer) DatumGetInt64(dat));
+      break;
     case TEXTOID:
       lua_pushstring(L, text2string(dat));
       break;
@@ -1072,7 +1070,7 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
         dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
-        dat = Int64GetDatum(get64lua(L, idx));
+        dat = Int64GetDatum(lua_tointeger(L, idx));
         break;
       case TEXTOID: {
         const char *s = lua_tostring(L, idx);

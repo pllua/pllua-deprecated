@@ -44,7 +44,6 @@ pllua_debug.o \
 pllua_xact_cleanup.o \
 plluaapi.o \
 plluaspi.o \
-lua_int64.o \
 rtupdesc.o \
 rtupdescstk.o \
 pllua_pgfunc.o \
