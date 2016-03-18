@@ -521,6 +521,9 @@ lua_State *luaP_newstate (int trusted) {
       {LUA_TABLIBNAME, luaopen_table},
       {LUA_STRLIBNAME, luaopen_string},
       {LUA_MATHLIBNAME, luaopen_math},
+#ifdef LUA_JITLIBNAME
+      {LUA_JITLIBNAME, luaopen_jit},
+#endif
       {LUA_OSLIBNAME, luaopen_os}, /* restricted */
       {LUA_LOADLIBNAME, luaopen_package}, /* just for pllua.init modules */
       {NULL, NULL}
@@ -590,7 +593,7 @@ lua_State *luaP_newstate (int trusted) {
     const char *package_keys[] = { /* to be removed */
       "preload", "loadlib", "loaders", "seeall", NULL};
     const char *global_keys[] = { /* to be removed */
-      "require", "module", "dofile", "loadfile", NULL};
+      "require", "module", "dofile", "loadfile", "jit", NULL};
     const char **s;
     /* clean package module */
     lua_getglobal(L, "package");
