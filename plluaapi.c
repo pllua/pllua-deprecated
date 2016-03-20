@@ -516,7 +516,9 @@ lua_State *luaP_newstate (int trusted) {
 #else
       {"_G", luaopen_base},
       {LUA_COLIBNAME, luaopen_coroutine},
+#if LUA_VERSION_NUM < 503
       {LUA_BITLIBNAME, luaopen_bit32},
+#endif
 #endif
       {LUA_TABLIBNAME, luaopen_table},
       {LUA_STRLIBNAME, luaopen_string},
@@ -528,6 +530,7 @@ lua_State *luaP_newstate (int trusted) {
     const char *os_funcs[] = {"date", "clock", "time", "difftime", NULL};
     const luaL_Reg *reg = luaP_trusted_libs;
     const char **s = os_funcs;
+
     for (; reg->func; reg++) {
 #if LUA_VERSION_NUM <= 501
       lua_pushcfunction(L, reg->func);
@@ -587,6 +590,7 @@ lua_State *luaP_newstate (int trusted) {
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
   if (trusted) {
+	
     const char *package_keys[] = { /* to be removed */
       "preload", "loadlib", "loaders", "seeall", NULL};
     const char *global_keys[] = { /* to be removed */

@@ -135,6 +135,7 @@ int pllua_getmaster_index(lua_State *L) {
     return 1;
 }
 
+#if LUA_VERSION_NUM < 502
 void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
     luaL_checkstack(L, nup+1, "too many upvalues");
     for (; l->name != NULL; l++) {  /* fill the table with given functions */
@@ -147,6 +148,7 @@ void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
     }
     lua_pop(L, nup);  /* remove upvalues */
 }
+#endif
 
 int pg_to_regtype(char *typ_name)
 {
