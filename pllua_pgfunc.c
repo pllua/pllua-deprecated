@@ -1,3 +1,29 @@
+/*
+   pgfunc works as a wrapper for postgres functions and as a loader as module for
+ pllua (internal)->internal  functions.
+
+ pgfunc(text - function singnature)
+ pgfunc(text - function singnature, table - options)
+
+options =
+{
+only_internal = true --false,
+--[[if only_internal is false, pgfunc accepts any function]]
+
+throwable = true --false
+--[[ throwable makes PG_TRY PG_CATCH for non internal functions]]
+
+]]
+
+}
+
+Note:
+Set returning functions are not supported.
+In/Out functions are not supported.
+No checks if function is strict.
+
+ */
+
 #include "pllua_pgfunc.h"
 
 #include "plluacommon.h"
@@ -8,6 +34,8 @@
 #include <lib/stringinfo.h>
 
 #include "pllua_errors.h"
+
+#define RESET_CONTEXT_AFTER 1000
 
 static const char pg_func_type_name[] = "pg_func";
 
@@ -37,7 +65,10 @@ static Oid get_plluau_oid(){
     return find_lang_oids("plluau");
 }
 
-
+typedef struct{
+    bool only_internal;
+    bool throwable;
+} Pgfunc_options;
 
 typedef struct{
     Oid         funcid;
@@ -47,6 +78,9 @@ typedef struct{
     char	   *argmodes;
     lua_CFunction  callfunc;
     Oid         prorettype;
+
+    FmgrInfo	fi;
+    Pgfunc_options options;
 } PgFuncInfo, Lua_pgfunc;
 
 #define freeandnil(p)    do{ if (p){\
@@ -60,155 +94,87 @@ static void clean_pgfuncinfo(Lua_pgfunc *data){
     freeandnil (data->argmodes);
 }
 
+static MemoryContext get_tmpcontext(){
+    MemoryContext mc;
+    mc = AllocSetContextCreate(TopMemoryContext,
+                                                     "pgfunc temporary context",
+                                                     ALLOCSET_DEFAULT_MINSIZE,
+                                                     ALLOCSET_DEFAULT_INITSIZE,
+                                                     ALLOCSET_DEFAULT_MAXSIZE);
+    return mc;
+}
 
-static int call_0(lua_State *L){
+static MemoryContext tmpcontext;
+static int tmpcontext_usage = 0;
+
+static int pg_callable_func(lua_State *L)
+{
+    MemoryContext m;
+    int i;
+    FunctionCallInfoData fcinfo;
     Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    luaP_pushdatum(L, OidFunctionCall0(fi->funcid), fi->prorettype);
+    InitFunctionCallInfoData(fcinfo, &fi->fi, fi->numargs, InvalidOid, NULL, NULL);
+
+    if(tmpcontext_usage> RESET_CONTEXT_AFTER ){
+        MemoryContextReset(tmpcontext);
+        tmpcontext_usage = 0;
+    }
+    ++tmpcontext_usage;
+
+    m = MemoryContextSwitchTo(tmpcontext);
+
+    for (i=0; i<fi->numargs; ++i){
+        fcinfo.arg[i] = luaP_todatum(L, fi->argtypes[i], 0, &fcinfo.argnull[i], i+1);
+    }
+
+    if(!fi->options.only_internal && fi->options.throwable){\
+        SPI_push();
+        PG_TRY();
+        {
+            Datum d = FunctionCallInvoke(&fcinfo);
+            MemoryContextSwitchTo(m);
+            luaP_pushdatum(L, d, fi->prorettype);
+            SPI_pop();
+        }
+        PG_CATCH();
+        {
+            lua_pop(L, lua_gettop(L));
+            push_spi_error(L, m); /*context switch to m inside push_spi_error*/
+            SPI_pop();
+            return lua_error(L);
+        }PG_END_TRY();
+    }else{
+        Datum d = FunctionCallInvoke(&fcinfo);
+        MemoryContextSwitchTo(m);
+        luaP_pushdatum(L, d, fi->prorettype);
+    }
+
     return 1;
 }
 
-#define g_datum(v) luaP_todatum(L, fi->argtypes[v], 0, &isnull, v+1)
-static int call_1(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
+static void parse_options(lua_State *L, Pgfunc_options *opt){
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+        if (lua_type(L, -2) == LUA_TSTRING){
+            const char *key = lua_tostring(L, -2);
 
-    luaP_pushdatum(L, OidFunctionCall1(fi->funcid,
-                                       g_datum(0)), fi->prorettype);
-    return 1;
+            if (strcmp(key, "only_internal") == 0){
+                opt->only_internal =  lua_toboolean(L, -1);
+            } else if (strcmp(key, "throwable") == 0){
+                opt->throwable =  lua_toboolean(L, -1);
+            } else {
+                luaL_error(L, "pgfunc unknown option \"%s\"", key);
+            }
+
+        }
+        lua_pop(L, 1);
+    }
 }
-static int call_2(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall2(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1)), fi->prorettype);
-    return 1;
-}
-static int call_3(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall3(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2)), fi->prorettype);
-    return 1;
-}
-static int call_4(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall4(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3)), fi->prorettype);
-    return 1;
-}
-static int call_5(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall5(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3),
-                                       g_datum(4)), fi->prorettype);
-    return 1;
-}
-static int call_6(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall6(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3),
-                                       g_datum(4),
-                                       g_datum(5)), fi->prorettype);
-    return 1;
-}
-static int call_7(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall7(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3),
-                                       g_datum(4),
-                                       g_datum(5),
-                                       g_datum(6)), fi->prorettype);
-    return 1;
-}
-static int call_8(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall8(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3),
-                                       g_datum(4),
-                                       g_datum(5),
-                                       g_datum(6),
-                                       g_datum(7)), fi->prorettype);
-    return 1;
-}
-static int call_9(lua_State *L)
-{
-    Lua_pgfunc *fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
-    bool isnull;
-
-    luaP_pushdatum(L, OidFunctionCall9(fi->funcid,
-                                       g_datum(0),
-                                       g_datum(1),
-                                       g_datum(2),
-                                       g_datum(3),
-                                       g_datum(4),
-                                       g_datum(5),
-                                       g_datum(6),
-                                       g_datum(7),
-                                       g_datum(8)), fi->prorettype);
-    return 1;
-}
-#undef g_datum
-
-
-
-static lua_CFunction pg_callable_funcs[] =
-{
-    call_0,
-    call_1,
-    call_2,
-    call_3,
-    call_4,
-    call_5,
-    call_6,
-    call_7,
-    call_8,
-    call_9,
-    NULL
-};
-
-
 
 int get_pgfunc(lua_State *L)
 {
     Lua_pgfunc *lf;
+    Pgfunc_options opt;
     MemoryContext mcxt;
     MemoryContext m;
     const char* reg_name = NULL;
@@ -221,7 +187,14 @@ int get_pgfunc(lua_State *L)
     Oid funcid = 0;
 
     BEGINLUA;
-    if (lua_gettop(L) != 1){
+
+    opt.only_internal = true;
+    opt.throwable = true;
+
+    if (lua_gettop(L) == 2){
+        luaL_checktype(L, 2, LUA_TTABLE);
+        parse_options(L, &opt);
+    }else if (lua_gettop(L) != 1){
         return luaL_error(L, "pgfunc(text): wrong arguments");
     }
     if(lua_type(L, 1) == LUA_TSTRING){
@@ -252,26 +225,23 @@ int get_pgfunc(lua_State *L)
 
     luasrc = ((proc->prolang == get_pllua_oid())
               || (proc->prolang == get_plluau_oid()));
-    if ( (proc->prolang != INTERNALlanguageId)
-            &&(proc->prolang != SQLlanguageId)
-            &&(proc->prolang != ClanguageId)
+    if ( opt.only_internal
+            &&(proc->prolang != INTERNALlanguageId)
             &&(!luasrc) ){
         ReleaseSysCache(proctup);
         return luaL_error(L, "supported only SQL/internal functions");
     }
 
-
-
     lf = (Lua_pgfunc *)lua_newuserdata(L, sizeof(Lua_pgfunc));
 
-    //make it g/collected
+    /*make it g/collected*/
     luaP_getfield(L, pg_func_type_name);
     lua_setmetatable(L, -2);
 
 
     lf->prorettype = proc->prorettype;
     lf->funcid = funcid;
-
+    lf->options = opt;
 
     mcxt = get_common_ctx();
     m  = MemoryContextSwitchTo(mcxt);
@@ -349,7 +319,9 @@ int get_pgfunc(lua_State *L)
         return luaL_error(L, "pgfunc error: %s",reg_error);
     }
 
-    lua_pushcclosure(L, pg_callable_funcs[lf->numargs], 1);
+    fmgr_info(funcid, &lf->fi);
+
+    lua_pushcclosure(L, pg_callable_func, 1);
 
     ReleaseSysCache(proctup);
 
@@ -383,4 +355,5 @@ void register_funcinfo_mt(lua_State *L)
     __newmetatable(L, pg_func_type_name);
     luaP_register(L, regs);
     lua_pop(L, 1);
+    tmpcontext = get_tmpcontext();
 }

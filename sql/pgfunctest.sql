@@ -36,3 +36,31 @@ RETURNS SETOF text AS $$
   coroutine.yield(i_void.getAnswer())
 $$ LANGUAGE pllua;
 select pg_temp.pgfunc_test();
+
+do $$
+print(pgfunc('quote_nullable(text)')(nil))
+$$ language pllua;
+
+create or replace function pg_temp.throw_error(text) returns void as $$
+begin
+raise exception '%', $1;
+end
+$$ language plpgsql;
+
+do $$
+pgfunc('pg_temp.throw_error(text)',{only_internal=false})("exception test")
+$$ language pllua;
+
+do $$
+local f = pgfunc('pg_temp.throw_error(text)',{only_internal=false})
+print(pcall(f, "exception test"))
+$$ language pllua;
+
+create or replace function pg_temp.no_throw() returns jsonb as $$
+select '{"a":5, "b":10}'::jsonb
+$$ language sql;
+
+do $$
+local f = pgfunc('pg_temp.no_throw()',{only_internal=false, throwable=false})
+print(f())
+$$ language pllua;
