@@ -21,8 +21,7 @@ create or replace function pg_temp.function_with_error() returns integer as $$
 $$language plluau;
 
 create or replace function pg_temp.second_function() returns void as $$
-	for k in server.rows('select pg_temp.function_with_error()') do
-	end
+	local k = server.execute('select pg_temp.function_with_error()') [0]
 $$language plluau;
 
 do $$ 
