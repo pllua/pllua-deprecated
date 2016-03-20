@@ -44,6 +44,7 @@ PGDLLEXPORT Datum plluau_inline_handler(PG_FUNCTION_ARGS);
 #include "pllua_xact_cleanup.h"
 PG_FUNCTION_INFO_V1(_PG_init);
 Datum _PG_init(PG_FUNCTION_ARGS) {
+  init_procedure_caches();
   init_vmstructs();
   pllua_init_common_ctx();
   LuaVM[0] = luaP_newstate(0); /* untrusted */
