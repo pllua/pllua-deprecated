@@ -243,9 +243,9 @@ tostring(lua_State *L) {
     if (lua_gettop(L) == 1) {
         char str[24];
 #ifndef _MSC_VER
-        sprintf(str, "%" PRId64, n);
+        snprintf(str, sizeof(str), "%" PRId64, n);
 #else
-        sprintf(str,"%10lld", (long long)n);
+        snprintf(str, sizeof(str), "%10lld", (long long)n);
 #endif
         lua_pushstring(L,str);
     } else {
