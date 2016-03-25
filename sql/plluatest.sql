@@ -300,6 +300,24 @@ $$
 language pllua;
 select nested_server_rows();
 
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield(nil)
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+
+select quote_nullable(pg_temp.srf());
+
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield()
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+
+select quote_nullable(pg_temp.srf());
+
 -- body reload
 SELECT hello('PostgreSQL');
 CREATE OR REPLACE FUNCTION hello(name text)

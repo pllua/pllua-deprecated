@@ -508,6 +508,32 @@ select nested_server_rows();
  4 6
 (4 rows)
 
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield(nil)
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+select quote_nullable(pg_temp.srf());
+ quote_nullable 
+----------------
+ '1'
+ NULL
+ '2'
+(3 rows)
+
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield()
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+select quote_nullable(pg_temp.srf());
+ quote_nullable 
+----------------
+ '1'
+(1 row)
+
 -- body reload
 SELECT hello('PostgreSQL');
        hello        
