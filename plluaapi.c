@@ -1322,7 +1322,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         status = lua_resume(fi->L, fi->L, fcinfo->nargs);
 #endif
         rtds_notinuse(fi->funcxt_wp);
-        hasresult = !lua_isnoneornil(fi->L, 1);
+        hasresult = !lua_isnone(fi->L, 1);
         if (status == LUA_YIELD && hasresult) {
           rsi->isDone = ExprMultipleResult; /* SRF: next */
           retval = luaP_getresult(fi->L, fcinfo, fi->result);
