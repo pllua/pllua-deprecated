@@ -150,6 +150,36 @@ static luaP_Tuple* luaP_PTuple_rawctr(lua_State * L, HeapTuple tuple, int readon
 static luaP_Tuple* luaP_pushPTuple(lua_State * L, size_t size, luaP_Tuple *ptr);
 #define LUAP_pushtuple_from_ptr(L,t) luaP_pushPTuple(L,0,t)
 
+void
+luaP_pushrecord(lua_State *L, Datum record){
+	HeapTupleHeader	header = DatumGetHeapTupleHeader(record);
+	TupleDesc tupdesc;
+	HeapTupleData tuple;
+	RTupDesc *shared_desc;
+
+	PG_TRY();
+	{
+		tupdesc = lookup_rowtype_tupdesc(HeapTupleHeaderGetTypeId(header),
+						 HeapTupleHeaderGetTypMod(header));
+		/* Build a temporary HeapTuple control structure */
+		tuple.t_len = HeapTupleHeaderGetDatumLength(header);
+		ItemPointerSetInvalid(&(tuple.t_self));
+		tuple.t_tableOid = InvalidOid;
+		tuple.t_data = header;
+
+		shared_desc = rtupdesc_ctor(L, tupdesc);
+		luaP_pushtuple_cmn(L, &tuple, true, shared_desc);
+		rtupdesc_unref(shared_desc);
+
+		ReleaseTupleDesc(tupdesc);
+	}
+	PG_CATCH();
+	{
+		luaL_error(L, "record to lua error");
+	}
+	PG_END_TRY();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 #define FETCH_CSR_Q 50
 #define TUPLE_QUEUE_SIZE FETCH_CSR_Q + 1

@@ -44,6 +44,7 @@ Oid luaP_gettypeoid (const char *type_name);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 void luaP_pushcursor (lua_State *L, Portal cursor);
+void luaP_pushrecord(lua_State *L, Datum record);
 Portal luaP_tocursor (lua_State *L, int pos);
 
 /* =========================================================================
