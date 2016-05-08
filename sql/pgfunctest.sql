@@ -64,3 +64,32 @@ do $$
 local f = pgfunc('pg_temp.no_throw()',{only_internal=false, throwable=false})
 print(f())
 $$ language pllua;
+CREATE or replace FUNCTION pg_temp.arg_count(a1 integer,a2 integer,a3 integer,a4 integer,a5 integer
+,a6 integer,a7 integer,a8 integer,a9 integer,a10 integer
+,a11 integer,a12 integer,a13 integer,a14 integer,a15 integer ) returns integer AS
+$$
+begin
+return a1+a2+a3+a4+a5+a6+a7+a8+a9+a10+a11+a12+a13+a14+a15;
+end
+$$
+LANGUAGE plpgsql;
+do $$
+local f = pgfunc([[pg_temp.arg_count(integer, integer, integer, integer, integer,
+ integer, integer, integer, integer, integer, 
+ integer, integer, integer, integer, integer ) ]],{only_internal=false});
+print(f(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15))
+$$ language pllua;
+CREATE or replace FUNCTION pg_temp.inoutf(a integer, INOUT b text, INOUT c text)  AS
+$$
+begin
+c = a||'c:'||c;
+b = 'b:'||b;
+end
+$$
+LANGUAGE plpgsql;
+do $$
+local f = pgfunc('pg_temp.inoutf(integer,text,text)',{only_internal=false});
+local r = f(5, 'ABC', 'd')
+print(r.b)
+print(r.c)
+$$ language pllua

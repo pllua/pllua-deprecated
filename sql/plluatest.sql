@@ -300,6 +300,40 @@ $$
 language pllua;
 select nested_server_rows();
 
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield(nil)
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+
+select quote_nullable(pg_temp.srf());
+
+CREATE OR REPLACE FUNCTION pg_temp.srf()
+RETURNS SETOF integer AS $$
+  coroutine.yield(1)
+  coroutine.yield()
+  coroutine.yield(2)
+$$ LANGUAGE pllua;
+
+select quote_nullable(pg_temp.srf());
+
+CREATE or replace FUNCTION pg_temp.inoutf(a integer, INOUT b text, INOUT c text)  AS
+$$
+begin
+c = a||'c:'||c;
+b = 'b:'||b;
+end
+$$
+LANGUAGE plpgsql;
+
+do $$
+local a = server.execute("SELECT pg_temp.inoutf(5, 'ABC', 'd') as val ");
+local r = a[1].val
+print(r.b)
+print(r.c)
+$$ language pllua;
+
 -- body reload
 SELECT hello('PostgreSQL');
 CREATE OR REPLACE FUNCTION hello(name text)

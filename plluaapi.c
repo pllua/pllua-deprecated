@@ -464,12 +464,25 @@ static int luaP_fromstring (lua_State *L) {
   return 1;
 }
 
+#ifdef PLLUA_DEBUG
+static int
+luaP_memstat(lua_State *L)
+{
+	(void)L;
+	MemoryContextStats(TopMemoryContext);
+	return 0;
+}
+#endif
+
 static const luaL_Reg luaP_funcs[] = {
     {"assert", luaB_assert},
     {"error", luaB_error},
     {"fromstring", luaP_fromstring},
     {"info", luaP_info},
     {"log", luaP_log},
+#ifdef PLLUA_DEBUG
+    {"memstat", luaP_memstat},
+#endif
     {"notice", luaP_notice},
     {"pcall", subt_luaB_pcall},
     {"pgfunc", get_pgfunc},
@@ -872,6 +885,9 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       else lua_pushnil(L);
       break;
     }
+    case RECORDOID:
+      luaP_pushrecord(L, dat);
+      break;
     default: {
       luaP_Typeinfo *ti;
       ti = luaP_gettypeinfo(L, type);
@@ -1322,7 +1338,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         status = lua_resume(fi->L, fi->L, fcinfo->nargs);
 #endif
         rtds_notinuse(fi->funcxt_wp);
-        hasresult = !lua_isnoneornil(fi->L, 1);
+        hasresult = !lua_isnone(fi->L, 1);
         if (status == LUA_YIELD && hasresult) {
           rsi->isDone = ExprMultipleResult; /* SRF: next */
           retval = luaP_getresult(fi->L, fcinfo, fi->result);
