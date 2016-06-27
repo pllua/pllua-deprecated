@@ -149,7 +149,11 @@ pg_callable_func(lua_State *L)
 		{
 			Datum d = FunctionCallInvoke(&fcinfo);
 			MemoryContextSwitchTo(m);
-			luaP_pushdatum(L, d, fi->prorettype);
+			if (fcinfo.isnull) {
+				lua_pushnil(L);
+			} else {
+				luaP_pushdatum(L, d, fi->prorettype);
+			}
 			SPI_pop();
 		}
 		PG_CATCH();
@@ -162,7 +166,11 @@ pg_callable_func(lua_State *L)
 	}else{
 		Datum d = FunctionCallInvoke(&fcinfo);
 		MemoryContextSwitchTo(m);
-		luaP_pushdatum(L, d, fi->prorettype);
+		if (fcinfo.isnull) {
+			lua_pushnil(L);
+		} else {
+			luaP_pushdatum(L, d, fi->prorettype);
+		}
 	}
 
 	return 1;
