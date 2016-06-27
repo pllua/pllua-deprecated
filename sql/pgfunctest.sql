@@ -146,5 +146,16 @@ end
 for hv in hstore.each(v) do
 	print ("key = " .. hv.key .. "    value = "..hv.value)
 end
- $$ language pllua
+ $$ language pllua;
+
+create or replace function getnull() returns text as $$
+begin
+return null;
+end
+$$ language plpgsql;
+
+do $$
+local a = pgfunc('getnull()',{only_internal = false})
+print(a())
+$$ language pllua;
 
