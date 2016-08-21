@@ -104,6 +104,7 @@ clean_pgfuncinfo(Lua_pgfunc *data)
 	freeandnil (data->argtypes);
 }
 
+#ifdef PGFUNC_CLEANUP
 static MemoryContext
 get_tmpcontext()
 {
@@ -115,9 +116,13 @@ get_tmpcontext()
 				   ALLOCSET_DEFAULT_MAXSIZE);
 	return mc;
 }
+#endif
 
 static MemoryContext tmpcontext;
+
+#ifdef PGFUNC_CLEANUP
 static int tmpcontext_usage = 0;
+#endif
 
 static int
 pg_callable_func(lua_State *L)
@@ -127,15 +132,21 @@ pg_callable_func(lua_State *L)
 	FunctionCallInfoData fcinfo;
 	Lua_pgfunc *fi;
 
+#ifndef PGFUNC_CLEANUP
+	tmpcontext = CurTransactionContext;
+#endif
+
 	fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
 
 	InitFunctionCallInfoData(fcinfo, &fi->fi, fi->numargs, InvalidOid, NULL, NULL);
 
+#ifdef PGFUNC_CLEANUP
 	if(tmpcontext_usage> RESET_CONTEXT_AFTER ){
 		MemoryContextReset(tmpcontext);
 		tmpcontext_usage = 0;
 	}
 	++tmpcontext_usage;
+#endif
 
 	m = MemoryContextSwitchTo(tmpcontext);
 
@@ -291,6 +302,10 @@ get_pgfunc(lua_State *L)
 
 	BEGINLUA;
 
+#ifndef PGFUNC_CLEANUP
+	tmpcontext = CurTransactionContext;
+#endif
+
 	opt.only_internal = true;
 	opt.throwable = true;
 
@@ -310,7 +325,9 @@ get_pgfunc(lua_State *L)
 		PG_CATCH();{}
 		PG_END_TRY();
 		MemoryContextSwitchTo(m);
+#ifdef PGFUNC_CLEANUP
 		MemoryContextReset(tmpcontext);
+#endif
 	}else if (lua_type(L, 1) == LUA_TNUMBER){
 		funcid = luaL_checkinteger(L, 1);
 	}
@@ -367,7 +384,9 @@ get_pgfunc(lua_State *L)
 		lf->argtypes = (Oid*)palloc(argc * sizeof(Oid));
 		memcpy(lf->argtypes, argtypes, argc * sizeof(Oid));
 		MemoryContextSwitchTo(cur);
+#ifdef PGFUNC_CLEANUP
 		MemoryContextReset(tmpcontext);
+#endif
 	}
 
 	if (luasrc){
@@ -457,7 +476,9 @@ static luaL_Reg regs[] = {
 	{ NULL, NULL }
 };
 
+#ifdef PGFUNC_CLEANUP
 static bool cxt_initialized = false;
+#endif
 
 void
 register_funcinfo_mt(lua_State *L)
@@ -465,8 +486,10 @@ register_funcinfo_mt(lua_State *L)
 	__newmetatable(L, pg_func_type_name);
 	luaP_register(L, regs);
 	lua_pop(L, 1);
+#ifdef PGFUNC_CLEANUP
 	if (!cxt_initialized){
 		tmpcontext = get_tmpcontext();
 		cxt_initialized = true;
 	}
+#endif
 }
