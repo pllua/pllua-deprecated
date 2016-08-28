@@ -92,4 +92,70 @@ local f = pgfunc('pg_temp.inoutf(integer,text,text)',{only_internal=false});
 local r = f(5, 'ABC', 'd')
 print(r.b)
 print(r.c)
-$$ language pllua
+$$ language pllua;
+do $$
+local f = pgfunc('generate_series(int,int)')
+print('4-6')
+for rr in f(4,6) do
+	print(rr)
+end
+
+print('1-3')
+for rr in f(1,3) do
+	print(rr)
+end
+
+$$ language pllua;
+do $$
+local f = pgfunc('generate_series(int,int)')
+for rr in f(1,3) do
+
+	for rr in f(41,43) do
+		print(rr)
+	end
+	print(rr)
+end
+$$ language pllua;
+
+-- Type wrapper
+
+create extension hstore;
+do $$
+local hstore = {
+	fromstring = function(text)
+		return fromstring('hstore',text)
+	end,
+	akeys = pgfunc('akeys(hstore)',{only_internal = false}),
+	each = pgfunc('each(hstore)',{only_internal = false}) --orig:each(IN hs hstore, OUT key text, OUT value text)
+}
+ 
+local v = hstore.fromstring[[
+	"paperback" => "542",
+	"publisher" => "postgresql.org",
+	"language"  => "English",
+	"ISBN-13"   => "978-0000000000",
+	"weight"    => "24.1 ounces"
+]]
+
+print(v)
+
+for _,v in ipairs(hstore.akeys(v)) do
+	print (v)
+end
+
+for hv in hstore.each(v) do
+	print ("key = " .. hv.key .. "    value = "..hv.value)
+end
+ $$ language pllua;
+
+create or replace function getnull() returns text as $$
+begin
+return null;
+end
+$$ language plpgsql;
+
+do $$
+local a = pgfunc('getnull()',{only_internal = false})
+print(a())
+$$ language pllua;
+

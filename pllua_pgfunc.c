@@ -85,6 +85,14 @@ typedef struct{
 	Pgfunc_options options;
 } PgFuncInfo, Lua_pgfunc;
 
+typedef struct{
+	FmgrInfo fi;
+	ExprContext econtext;
+	ReturnSetInfo rsinfo;
+	FunctionCallInfoData fcinfo;
+	Oid prorettype;
+} Lua_pgfunc_srf;
+
 #define freeandnil(p) do{ if (p){\
 	pfree(p);\
 	p = NULL;\
@@ -96,6 +104,7 @@ clean_pgfuncinfo(Lua_pgfunc *data)
 	freeandnil (data->argtypes);
 }
 
+#ifdef PGFUNC_CLEANUP
 static MemoryContext
 get_tmpcontext()
 {
@@ -107,9 +116,13 @@ get_tmpcontext()
 				   ALLOCSET_DEFAULT_MAXSIZE);
 	return mc;
 }
+#endif
 
 static MemoryContext tmpcontext;
+
+#ifdef PGFUNC_CLEANUP
 static int tmpcontext_usage = 0;
+#endif
 
 static int
 pg_callable_func(lua_State *L)
@@ -119,15 +132,21 @@ pg_callable_func(lua_State *L)
 	FunctionCallInfoData fcinfo;
 	Lua_pgfunc *fi;
 
+#ifndef PGFUNC_CLEANUP
+	tmpcontext = CurTransactionContext;
+#endif
+
 	fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
 
 	InitFunctionCallInfoData(fcinfo, &fi->fi, fi->numargs, InvalidOid, NULL, NULL);
 
+#ifdef PGFUNC_CLEANUP
 	if(tmpcontext_usage> RESET_CONTEXT_AFTER ){
 		MemoryContextReset(tmpcontext);
 		tmpcontext_usage = 0;
 	}
 	++tmpcontext_usage;
+#endif
 
 	m = MemoryContextSwitchTo(tmpcontext);
 
@@ -141,7 +160,11 @@ pg_callable_func(lua_State *L)
 		{
 			Datum d = FunctionCallInvoke(&fcinfo);
 			MemoryContextSwitchTo(m);
-			luaP_pushdatum(L, d, fi->prorettype);
+			if (fcinfo.isnull) {
+				lua_pushnil(L);
+			} else {
+				luaP_pushdatum(L, d, fi->prorettype);
+			}
 			SPI_pop();
 		}
 		PG_CATCH();
@@ -154,7 +177,11 @@ pg_callable_func(lua_State *L)
 	}else{
 		Datum d = FunctionCallInvoke(&fcinfo);
 		MemoryContextSwitchTo(m);
-		luaP_pushdatum(L, d, fi->prorettype);
+		if (fcinfo.isnull) {
+			lua_pushnil(L);
+		} else {
+			luaP_pushdatum(L, d, fi->prorettype);
+		}
 	}
 
 	return 1;
@@ -180,6 +207,87 @@ parse_options(lua_State *L, Pgfunc_options *opt){
 	}
 }
 
+static int pgfunc_rowsaux (lua_State *L) {
+	ReturnSetInfo *rsinfo;
+
+	FunctionCallInfoData *fcinfo;
+	Datum d;
+	Oid prorettype;
+	Lua_pgfunc_srf *srfi;
+
+	srfi = (Lua_pgfunc_srf *) lua_touserdata(L, lua_upvalueindex(1));
+
+	rsinfo = &srfi->rsinfo;
+	fcinfo = &srfi->fcinfo;
+	prorettype = srfi->prorettype;
+
+	d = FunctionCallInvoke(fcinfo);
+	if ((!fcinfo->isnull)&&(rsinfo->isDone != ExprEndResult)){
+
+		luaP_pushdatum(L, d, prorettype);
+		return 1;
+	}
+
+	lua_pushnil(L);
+	return 1;
+
+}
+
+static int
+pgfunc_rows (lua_State *L) {
+	int i;
+
+	Lua_pgfunc *fi;
+
+	ReturnSetInfo *rsinfo;
+	ExprContext *econtext;
+	FunctionCallInfoData *fcinfo;
+	Lua_pgfunc_srf *srfi;
+	int argc;
+
+	BEGINLUA;
+
+	argc = lua_gettop(L);
+	fi = (Lua_pgfunc *) lua_touserdata(L, lua_upvalueindex(1));
+
+	srfi = (Lua_pgfunc_srf *)lua_newuserdata(L, sizeof(Lua_pgfunc_srf));
+
+	econtext = &srfi->econtext;
+	rsinfo = &srfi->rsinfo;
+	fcinfo = &srfi->fcinfo;
+	srfi->prorettype = fi->prorettype;
+
+	fmgr_info(fi->funcid, &srfi->fi);
+
+	memset(econtext, 0, sizeof(ExprContext));
+	econtext->ecxt_per_query_memory = CurrentMemoryContext;
+
+	rsinfo->type = T_ReturnSetInfo;
+	rsinfo->econtext = econtext;
+	rsinfo->allowedModes = (int)(SFRM_ValuePerCall /*| SFRM_Materialize*/);
+	rsinfo->returnMode = SFRM_ValuePerCall;//SFRM_Materialize;
+	rsinfo->setResult = NULL;
+	rsinfo->setDesc = NULL;
+
+	InitFunctionCallInfoData((*fcinfo), &srfi->fi, fi->numargs, InvalidOid, NULL, (fmNodePtr)rsinfo);
+
+	for (i=0; i<fi->numargs; ++i){
+		if(i>=argc){
+			for (i = argc; i<fi->numargs; ++i){
+				fcinfo->arg[i] = 0 ;//Datum;
+				fcinfo->argnull[i] = true;
+			}
+			break;
+		}
+		fcinfo->arg[i] = luaP_todatum(L, fi->argtypes[i], 0, &fcinfo->argnull[i], i+1);
+	}
+
+	lua_pushcclosure(L, pgfunc_rowsaux, 1);
+	ENDLUAV(1);
+	return 1;
+
+}
+
 int
 get_pgfunc(lua_State *L)
 {
@@ -193,6 +301,10 @@ get_pgfunc(lua_State *L)
 	Oid funcid = 0;
 
 	BEGINLUA;
+
+#ifndef PGFUNC_CLEANUP
+	tmpcontext = CurTransactionContext;
+#endif
 
 	opt.only_internal = true;
 	opt.throwable = true;
@@ -213,7 +325,9 @@ get_pgfunc(lua_State *L)
 		PG_CATCH();{}
 		PG_END_TRY();
 		MemoryContextSwitchTo(m);
+#ifdef PGFUNC_CLEANUP
 		MemoryContextReset(tmpcontext);
+#endif
 	}else if (lua_type(L, 1) == LUA_TNUMBER){
 		funcid = luaL_checkinteger(L, 1);
 	}
@@ -270,7 +384,9 @@ get_pgfunc(lua_State *L)
 		lf->argtypes = (Oid*)palloc(argc * sizeof(Oid));
 		memcpy(lf->argtypes, argtypes, argc * sizeof(Oid));
 		MemoryContextSwitchTo(cur);
+#ifdef PGFUNC_CLEANUP
 		MemoryContextReset(tmpcontext);
+#endif
 	}
 
 	if (luasrc){
@@ -323,10 +439,14 @@ get_pgfunc(lua_State *L)
 		return luaL_error(L, "pgfunc unknown error");
 	}
 
+	if(proc->proretset) {
+		lua_pushcclosure(L, pgfunc_rows, 1);
+	} else {
+		fmgr_info(funcid, &lf->fi);
+		lua_pushcclosure(L, pg_callable_func, 1);
+	}
 
-	fmgr_info(funcid, &lf->fi);
 
-	lua_pushcclosure(L, pg_callable_func, 1);
 
 	ReleaseSysCache(proctup);
 
@@ -356,7 +476,9 @@ static luaL_Reg regs[] = {
 	{ NULL, NULL }
 };
 
+#ifdef PGFUNC_CLEANUP
 static bool cxt_initialized = false;
+#endif
 
 void
 register_funcinfo_mt(lua_State *L)
@@ -364,8 +486,10 @@ register_funcinfo_mt(lua_State *L)
 	__newmetatable(L, pg_func_type_name);
 	luaP_register(L, regs);
 	lua_pop(L, 1);
+#ifdef PGFUNC_CLEANUP
 	if (!cxt_initialized){
 		tmpcontext = get_tmpcontext();
 		cxt_initialized = true;
 	}
+#endif
 }
