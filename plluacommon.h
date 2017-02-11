@@ -47,7 +47,7 @@
 void luaL_setfuncs (lua_State *L, const luaL_Reg *l, int nup);
 #endif
 
-#define PLLUA_VERSION "PL/Lua dev"
+#define PLLUA_VERSION "PL/Lua 1.1"
 
 #if defined(PLLUA_DEBUG)
 #include "pllua_debug.h"
