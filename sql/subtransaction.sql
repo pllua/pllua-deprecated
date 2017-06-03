@@ -1,3 +1,4 @@
+SET client_min_messages = warning;
 CREATE TABLE accounts
 (
   id bigserial NOT NULL,
@@ -6,6 +7,7 @@ CREATE TABLE accounts
   CONSTRAINT accounts_pkey PRIMARY KEY (id),
   CONSTRAINT no_minus CHECK (balance >= 0)
 );
+RESET client_min_messages;
 insert into accounts(account_name, balance) values('joe', 200);
 insert into accounts(account_name, balance) values('mary', 50);
 CREATE OR REPLACE FUNCTION pg_temp.sub_test()
