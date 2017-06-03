@@ -56,8 +56,8 @@ local f = pgfunc('pg_temp.throw_error(text)',{only_internal=false})
 print(pcall(f, "exception test"))
 $$ language pllua;
 
-create or replace function pg_temp.no_throw() returns jsonb as $$
-select '{"a":5, "b":10}'::jsonb
+create or replace function pg_temp.no_throw() returns json as $$
+select '{"a":5, "b":10}'::json
 $$ language sql;
 
 do $$
