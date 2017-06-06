@@ -160,7 +160,9 @@ $$ LANGUAGE pllua;
 SELECT * FROM get_rows('name');
 
 
+SET client_min_messages = warning;
 CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
+RESET client_min_messages;
 
 CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
   local p = server.prepare("insert into " .. t .. " values($1, $2, $3)",

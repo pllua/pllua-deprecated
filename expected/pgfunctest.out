@@ -65,14 +65,14 @@ local f = pgfunc('pg_temp.throw_error(text)',{only_internal=false})
 print(pcall(f, "exception test"))
 $$ language pllua;
 INFO:  false	exception test
-create or replace function pg_temp.no_throw() returns jsonb as $$
-select '{"a":5, "b":10}'::jsonb
+create or replace function pg_temp.no_throw() returns json as $$
+select '{"a":5, "b":10}'::json
 $$ language sql;
 do $$
 local f = pgfunc('pg_temp.no_throw()',{only_internal=false, throwable=false})
 print(f())
 $$ language pllua;
-INFO:  {"a": 5, "b": 10}
+INFO:  {"a":5, "b":10}
 CREATE or replace FUNCTION pg_temp.arg_count(a1 integer,a2 integer,a3 integer,a4 integer,a5 integer
 ,a6 integer,a7 integer,a8 integer,a9 integer,a10 integer
 ,a11 integer,a12 integer,a13 integer,a14 integer,a15 integer ) returns integer AS

@@ -232,7 +232,9 @@ SELECT * FROM get_rows('name');
    1 | name  | data
 (1 row)
 
+SET client_min_messages = warning;
 CREATE TABLE tree (id INT PRIMARY KEY, lchild INT, rchild INT);
+RESET client_min_messages;
 CREATE FUNCTION filltree (t text, n int) RETURNS void AS $$
   local p = server.prepare("insert into " .. t .. " values($1, $2, $3)",
     {"int4", "int4", "int4"})
