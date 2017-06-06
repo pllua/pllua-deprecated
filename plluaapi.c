@@ -75,7 +75,7 @@ static const char PLLUA_DATUM[] = "datum";
 #define PLLUA_INIT_EXIST \
   "select 1 from pg_catalog.pg_tables where schemaname='pllua'" \
   "and tablename='init'"
-#define PLLUA_INIT_LIST "select module from pllua.init"
+#define PLLUA_INIT_LIST "select distinct(module) from pllua.init"
 
 #define MaxArraySize ((Size) (MaxAllocSize / sizeof(Datum)))
 
@@ -308,9 +308,22 @@ static void luaP_preptrigger (lua_State *L, TriggerData *tdata) {
       lua_setfield(L, -2, "row"); /* old row */
     }
   }
+
   /* trigger name */
   lua_pushstring(L, tdata->tg_trigger->tgname);
   lua_setfield(L, -2, "name");
+
+  /* trigger args */
+  if (tdata->tg_trigger->tgnargs) {
+    int i;
+    lua_newtable(L);
+    for (i = 0; i < tdata->tg_trigger->tgnargs; i++) {
+      lua_pushstring(L, tdata->tg_trigger->tgargs[i]);
+      lua_rawseti(L, -2, i);
+    }
+    lua_setfield(L, -2, "args");
+  }
+
   /* done setting up trigger; now set global */
   lua_rawset(L, -3); /* _G[PLLUA_TRIGGERVAR] = table */
   lua_pop(L, 1); /* _G */
@@ -1293,13 +1306,10 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
                errmsg("[pllua]: trigger function can only be called as trigger")));
     if (istrigger) {
       TriggerData *trigdata = (TriggerData *) fcinfo->context;
-      int i, nargs;
       luaP_preptrigger(L, trigdata); /* set global trigger table */
-      nargs = trigdata->tg_trigger->tgnargs;
-      for (i = 0; i < nargs; i++) /* push args */
-        lua_pushstring(L, trigdata->tg_trigger->tgargs[i]);
-      //trigger call
-      if (lua_pcall(L, nargs, 0, 0)) {
+      
+      /* trigger call */
+      if (lua_pcall(L, 0, 0, 0)) {
 #if defined(PLLUA_DEBUG)
         luapg_error(L, getLINE());
 #else
