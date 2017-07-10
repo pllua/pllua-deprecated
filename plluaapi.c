@@ -1095,8 +1095,18 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
         dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
+#ifdef USE_FLOAT8_BYVAL
         dat = Int64GetDatum(get64lua(L, idx));
         break;
+#else
+      {
+        int64* value = (int64*)SPI_palloc(sizeof(int64));
+        *value = get64lua(L, idx);
+        dat = PointerGetDatum(value);
+        break;
+      }
+#endif
+
       case TEXTOID: {
         const char *s = lua_tostring(L, idx);
         if (s == NULL) elog(ERROR,
