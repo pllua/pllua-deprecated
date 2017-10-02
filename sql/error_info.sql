@@ -71,3 +71,10 @@ do $$
 error()
 $$language pllua;
 
+do $$
+local status, err = subtransaction(function() local _ = fromstring('no_type_text','qwerty') end)
+if (err) then
+    print(err)
+end
+$$ language pllua
+

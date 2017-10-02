@@ -40,7 +40,6 @@ void luaP_pushtuple_trg (lua_State *L, TupleDesc desc, HeapTuple tuple,
 HeapTuple luaP_totuple (lua_State *L);
 HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc);
 /* SPI */
-Oid luaP_gettypeoid (const char *type_name);
 void luaP_pushdesctable(lua_State *L, TupleDesc desc);
 void luaP_registerspi(lua_State *L);
 void luaP_pushcursor (lua_State *L, Portal cursor);
