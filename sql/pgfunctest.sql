@@ -47,9 +47,11 @@ raise exception '%', $1;
 end
 $$ language plpgsql;
 
+\set VERBOSITY 'terse'
 do $$
 pgfunc('pg_temp.throw_error(text)',{only_internal=false})("exception test")
 $$ language pllua;
+\set VERBOSITY 'default'
 
 do $$
 local f = pgfunc('pg_temp.throw_error(text)',{only_internal=false})

@@ -958,21 +958,6 @@ static int luaP_rowsplan (lua_State *L) {
 
 
 /* ======= SPI ======= */
-
-Oid luaP_gettypeoid (const char *type_name) {
-#if PG_VERSION_NUM < 80300
-  List *namelist = stringToQualifiedNameList(type_name, NULL);
-  HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist));
-#else
-  List *namelist = stringToQualifiedNameList(type_name);
-  HeapTuple typetup = typenameType(NULL, makeTypeNameFromNameList(namelist), NULL);
-#endif
-  Oid typeoid = HeapTupleGetOid(typetup);
-  ReleaseSysCache(typetup);
-  list_free(namelist);
-  return typeoid;
-}
-
 static int luaP_prepare (lua_State *L) {
     int nargs, cursoropt;
     const char *q = luaL_checkstring(L, 1);
@@ -995,7 +980,7 @@ static int luaP_prepare (lua_State *L) {
             int k = lua_tointeger(L, -2);
             if (k > 0) {
                 const char *s = luaL_checkstring(L, -1);
-                Oid type = luaP_gettypeoid(s);
+                Oid type = pg_to_regtype(s);
                 if (type == InvalidOid)
                     return luaL_error(L, "invalid type to plan: %s", s);
                 p->type[k - 1] = type;

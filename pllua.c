@@ -150,7 +150,7 @@ void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
 }
 #endif
 
-int pg_to_regtype(char *typ_name)
+Oid pg_to_regtype(const char *typ_name)
 {
 
     Oid			result;
@@ -161,14 +161,17 @@ int pg_to_regtype(char *typ_name)
      */
 
 #if PG_VERSION_NUM < 90400
-           parseTypeString(typ_name, &result, &typmod);
+    PG_TRY();
+    {
+    parseTypeString(typ_name, &result, &typmod);
+    }
+    PG_CATCH();
+    {
+        result = InvalidOid;
+    }
+    PG_END_TRY();
 #else
-            parseTypeString(typ_name, &result, &typmod, true);
+    parseTypeString(typ_name, &result, &typmod, true);
 #endif
-
-
-    if (OidIsValid(result))
-        return result;
-    else
-        return -1;
+    return result;
 }
