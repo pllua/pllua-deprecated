@@ -456,6 +456,17 @@ static int luaP_fromstring (lua_State *L) {
     Oid oid = pg_to_regtype(type_name);
     if (oid == InvalidOid) {
         return luaL_error(L,"type \"%s\" does not exist",type_name);
+    } else if (oid == BYTEAOID) {
+        size_t len;
+        Datum v;
+        const char *s = luaL_checklstring(L, 2, &len);
+
+        bytea *retval = (bytea *) palloc(len + VARHDRSZ);
+        SET_VARSIZE(retval, len + VARHDRSZ);
+        memcpy(VARDATA(retval), s, len);
+
+        v = PointerGetDatum(retval);
+        luaP_pushdatum(L, v, oid);
     } else {
         const char *s = luaL_checkstring(L, 2);
         luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
