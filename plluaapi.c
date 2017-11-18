@@ -945,9 +945,11 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
             luaP_pushrawdatum(L, dat, ti);
           break;
 #if PG_VERSION_NUM >= 80300
-        case TYPTYPE_ENUM:
-          lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat)); /* 4-byte long */
+        case TYPTYPE_ENUM: {
+          char *enum_str = DatumGetCString(DirectFunctionCall1(enum_out, dat));
+          lua_pushstring(L, enum_str);
           break;
+        }
 #endif
         default:
           argerror(type);
