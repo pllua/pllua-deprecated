@@ -6,6 +6,7 @@
 
 #include "pllua.h"
 #include "rowstamp.h"
+#include "lua_int64.h"
 #include "rtupdescstk.h"
 
 #include "pllua_pgfunc.h"
@@ -451,17 +452,33 @@ static int luaP_warning (lua_State *L) {
 #undef PLLUA_REPORT
 
 static int luaP_fromstring (lua_State *L) {
-  int oid = luaP_gettypeoid(luaL_checkstring(L, 1));
-  const char *s = luaL_checkstring(L, 2);
-  luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
-  int inoid = oid;
-  Datum v;
-  /* from getTypeIOParam in lsyscache.c */
-  if (ti->type == TYPTYPE_BASE && OidIsValid(ti->elem)) inoid = ti->elem;
-  v = InputFunctionCall(&ti->input, (char *) s, inoid, 0); /* typmod = 0 */
-  luaP_pushdatum(L, v, oid);
-  return 1;
+    const char *type_name = luaL_checkstring(L, 1);
+    Oid oid = pg_to_regtype(type_name);
+    if (oid == InvalidOid) {
+        return luaL_error(L,"type \"%s\" does not exist",type_name);
+    } else {
+        const char *s = luaL_checkstring(L, 2);
+        luaP_Typeinfo *ti = luaP_gettypeinfo(L, oid);
+        Oid inoid = oid;
+        Datum v;
+
+        /* from getTypeIOParam in lsyscache.c */
+        if (ti->type == TYPTYPE_BASE && OidIsValid(ti->elem)) inoid = ti->elem;
+        v = InputFunctionCall(&ti->input, (char *) s, inoid, 0); /* typmod = 0 */
+        luaP_pushdatum(L, v, oid);
+    }
+    return 1;
 }
+
+#ifdef PLLUA_DEBUG
+static int
+luaP_memstat(lua_State *L)
+{
+	(void)L;
+	MemoryContextStats(TopMemoryContext);
+	return 0;
+}
+#endif
 
 static const luaL_Reg luaP_funcs[] = {
     {"assert", luaB_assert},
@@ -469,6 +486,9 @@ static const luaL_Reg luaP_funcs[] = {
     {"fromstring", luaP_fromstring},
     {"info", luaP_info},
     {"log", luaP_log},
+#ifdef PLLUA_DEBUG
+    {"memstat", luaP_memstat},
+#endif
     {"notice", luaP_notice},
     {"pcall", subt_luaB_pcall},
     {"pgfunc", get_pgfunc},
@@ -515,11 +535,16 @@ lua_State *luaP_newstate (int trusted) {
 #else
       {"_G", luaopen_base},
       {LUA_COLIBNAME, luaopen_coroutine},
+#if LUA_VERSION_NUM < 503
       {LUA_BITLIBNAME, luaopen_bit32},
+#endif
 #endif
       {LUA_TABLIBNAME, luaopen_table},
       {LUA_STRLIBNAME, luaopen_string},
       {LUA_MATHLIBNAME, luaopen_math},
+#ifdef LUA_JITLIBNAME
+      {LUA_JITLIBNAME, luaopen_jit},
+#endif
       {LUA_OSLIBNAME, luaopen_os}, /* restricted */
       {LUA_LOADLIBNAME, luaopen_package}, /* just for pllua.init modules */
       {NULL, NULL}
@@ -527,6 +552,7 @@ lua_State *luaP_newstate (int trusted) {
     const char *os_funcs[] = {"date", "clock", "time", "difftime", NULL};
     const luaL_Reg *reg = luaP_trusted_libs;
     const char **s = os_funcs;
+
     for (; reg->func; reg++) {
 #if LUA_VERSION_NUM <= 501
       lua_pushcfunction(L, reg->func);
@@ -552,6 +578,7 @@ lua_State *luaP_newstate (int trusted) {
 
   register_error_mt(L);
   register_funcinfo_mt(L);
+  register_int64(L);
   /* setup typeinfo and raw datum MTs */
   lua_pushlightuserdata(L, (void *) PLLUA_TYPEINFO);
   lua_newtable(L); /* luaP_Typeinfo MT */
@@ -585,10 +612,11 @@ lua_State *luaP_newstate (int trusted) {
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
   if (trusted) {
+
     const char *package_keys[] = { /* to be removed */
       "preload", "loadlib", "loaders", "seeall", NULL};
     const char *global_keys[] = { /* to be removed */
-      "require", "module", "dofile", "loadfile", NULL};
+      "require", "module", "dofile", "loadfile", "jit", NULL};
     const char **s;
     /* clean package module */
     lua_getglobal(L, "package");
@@ -846,7 +874,12 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat));
       break;
     case INT8OID:
-      lua_pushinteger(L, (lua_Integer) DatumGetInt64(dat));
+#if LUA_VERSION_NUM >= 503
+      if (sizeof(lua_Integer) >= 8)
+        lua_pushinteger(L, (lua_Integer) DatumGetInt64(dat));
+      else
+#endif
+        setInt64lua(L,(DatumGetInt64(dat)));
       break;
     case TEXTOID:
       lua_pushstring(L, text2string(dat));
@@ -863,6 +896,9 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       else lua_pushnil(L);
       break;
     }
+    case RECORDOID:
+      luaP_pushrecord(L, dat);
+      break;
     default: {
       luaP_Typeinfo *ti;
       ti = luaP_gettypeinfo(L, type);
@@ -1070,7 +1106,20 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
         dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
-        dat = Int64GetDatum(lua_tointeger(L, idx));
+#if LUA_VERSION_NUM >= 503
+        if (sizeof(lua_Integer) >= 8)
+          dat = Int64GetDatum(lua_tointeger(L, idx));
+        else
+#endif
+#ifdef USE_FLOAT8_BYVAL
+          dat = Int64GetDatum(get64lua(L, idx));
+#else
+        {
+          int64* value = (int64*)SPI_palloc(sizeof(int64));
+          *value = get64lua(L, idx);
+          dat = PointerGetDatum(value);
+        }
+#endif
         break;
       case TEXTOID: {
         const char *s = lua_tostring(L, idx);
@@ -1313,7 +1362,7 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
         status = lua_resume(fi->L, fi->L, fcinfo->nargs);
 #endif
         rtds_notinuse(fi->funcxt_wp);
-        hasresult = !lua_isnoneornil(fi->L, 1);
+        hasresult = !lua_isnone(fi->L, 1);
         if (status == LUA_YIELD && hasresult) {
           rsi->isDone = ExprMultipleResult; /* SRF: next */
           retval = luaP_getresult(fi->L, fcinfo, fi->result);

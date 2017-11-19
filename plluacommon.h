@@ -93,6 +93,6 @@ int pllua_getmaster_index(lua_State *L);
     ___m  = MemoryContextSwitchTo(___mcxt)
 
 #define MTOPG MemoryContextSwitchTo(___m);}
-int pg_to_regtype(char *typ_name);
+Oid pg_to_regtype(const char *typ_name);
 
 #endif // PLLUACOMMON_H

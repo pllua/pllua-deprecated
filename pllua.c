@@ -135,6 +135,7 @@ int pllua_getmaster_index(lua_State *L) {
     return 1;
 }
 
+#if LUA_VERSION_NUM < 502
 void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
     luaL_checkstack(L, nup+1, "too many upvalues");
     for (; l->name != NULL; l++) {  /* fill the table with given functions */
@@ -147,8 +148,9 @@ void luaL_setfuncs(lua_State *L, const luaL_Reg *l, int nup) {
     }
     lua_pop(L, nup);  /* remove upvalues */
 }
+#endif
 
-int pg_to_regtype(char *typ_name)
+Oid pg_to_regtype(const char *typ_name)
 {
 
     Oid			result;
@@ -159,14 +161,17 @@ int pg_to_regtype(char *typ_name)
      */
 
 #if PG_VERSION_NUM < 90400
-           parseTypeString(typ_name, &result, &typmod);
+    PG_TRY();
+    {
+    parseTypeString(typ_name, &result, &typmod);
+    }
+    PG_CATCH();
+    {
+        result = InvalidOid;
+    }
+    PG_END_TRY();
 #else
-            parseTypeString(typ_name, &result, &typmod, true);
+    parseTypeString(typ_name, &result, &typmod, true);
 #endif
-
-
-    if (OidIsValid(result))
-        return result;
-    else
-        return -1;
+    return result;
 }
