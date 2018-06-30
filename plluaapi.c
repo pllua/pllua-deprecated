@@ -510,9 +510,7 @@ lua_State *luaP_newstate (int trusted) {
   int status;
 
 
-  MemoryContext mcxt = AllocSetContextCreate(TopMemoryContext,
-      "PL/Lua context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
-      ALLOCSET_DEFAULT_MAXSIZE);
+  MemoryContext mcxt = pg_create_context("PL/Lua context");
   lua_State *L = luaL_newstate();
   lua_atpanic(L, luaP_panic);
   /* version */
@@ -906,11 +904,10 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
           Datum value;
           lua_createtable(L, 0, ti->tupdesc->natts);
           for (i = 0; i < ti->tupdesc->natts; i++) {
-            Form_pg_attribute att = ti->tupdesc->attrs[i];
-            key = NameStr(att->attname);
-            value = GetAttributeByNum(tup, att->attnum, &isnull);
+            key = NameStr(TupleDescAttr(ti->tupdesc, i)->attname);
+            value = GetAttributeByNum(tup, TupleDescAttr(ti->tupdesc, i)->attnum, &isnull);
             if (!isnull) {
-              luaP_pushdatum(L, value, att->atttypid);
+              luaP_pushdatum(L, value, TupleDescAttr(ti->tupdesc, i)->atttypid);
               lua_setfield(L, -2, key);
             }
           }
@@ -1140,10 +1137,11 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
               /* create tuple */
               b = luaP_getbuffer(L, ti->tupdesc->natts);
               for (i = 0; i < ti->tupdesc->natts; i++) {
-                lua_getfield(L, idx, NameStr(ti->tupdesc->attrs[i]->attname));
+
+                lua_getfield(L, idx, NameStr(TupleDescAttr(ti->tupdesc, i)->attname));
                 /* only simple types allowed in record */
-                b->value[i] = luaP_todatum(L, ti->tupdesc->attrs[i]->atttypid,
-                    ti->tupdesc->attrs[i]->atttypmod, b->null + i, idx);
+                b->value[i] = luaP_todatum(L, TupleDescAttr(ti->tupdesc, i)->atttypid,
+                    TupleDescAttr(ti->tupdesc, i)->atttypmod, b->null + i, idx);
                 lua_pop(L, 1);
               }
               /* make copy in upper executor memory context */
