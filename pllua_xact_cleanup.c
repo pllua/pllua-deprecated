@@ -131,9 +131,7 @@ void pllua_xact_cb(XactEvent event, void *arg)
 
 void pllua_init_common_ctx()
 {
-    cmn_ctx = AllocSetContextCreate(TopMemoryContext,
-        "PL/Lua common context", ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE,
-        ALLOCSET_DEFAULT_MAXSIZE);
+    cmn_ctx = pg_create_context("PL/Lua common context");
 
     resource_stk = rsp_initStack();
 }

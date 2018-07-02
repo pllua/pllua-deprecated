@@ -101,7 +101,7 @@ void luaP_pushdesctable (lua_State *L, TupleDesc desc) {
   int i;
   lua_newtable(L);
   for (i = 0; i < desc->natts; i++) {
-    lua_pushstring(L, NameStr(desc->attrs[i]->attname));
+    lua_pushstring(L, NameStr(TupleDescAttr(desc, i)->attname));
     lua_pushinteger(L, i);
     lua_rawset(L, -3); /* t[att] = i */
   }
@@ -126,7 +126,7 @@ static void luaP_pushtuple_cmn (lua_State *L, HeapTuple tuple,
     for (i = 0; i < n; i++) {
 
         bool isnull;
-        t->value[i] = heap_getattr(tuple, tupleDesc->attrs[i]->attnum, tupleDesc,
+        t->value[i] = heap_getattr(tuple, TupleDescAttr(tupleDesc, i)->attnum, tupleDesc,
                                    &isnull);
         t->null[i] = isnull;
     }
@@ -376,7 +376,7 @@ static luaP_Tuple* luaP_PTuple_rawctr(lua_State * L, HeapTuple tuple, int readon
     t->rtupdesc = rtupdesc_ref(rtupdesc);
     for (i = 0; i < n; i++) {
         bool isnull;
-        t->value[i] = heap_getattr(tuple, tupleDesc->attrs[i]->attnum, tupleDesc,
+        t->value[i] = heap_getattr(tuple, TupleDescAttr(tupleDesc, i)->attnum, tupleDesc,
                                    &isnull);
         t->null[i] = isnull;
     }
@@ -435,7 +435,7 @@ static int luaP_p_tupleindex (lua_State *L) {
             }
             if ((i >= 0)&&(i < tupleDesc->natts)) {
                 if (!t->null[i])
-                    luaP_pushdatum(L, t->value[i], tupleDesc->attrs[i]->atttypid);
+                    luaP_pushdatum(L, t->value[i], TupleDescAttr(tupleDesc, i)->atttypid);
                 else lua_pushnil(L);
             }
             else {
@@ -460,7 +460,7 @@ static int luaP_p_tupleindex (lua_State *L) {
         }
         for (i = 0; i< tupleDesc->natts; ++i){
 
-            if (strcmp(NameStr(tupleDesc->attrs[i]->attname),name) == 0){
+            if (strcmp(NameStr(TupleDescAttr(tupleDesc, i)->attname),name) == 0){
                 idx = i;
                 break;
             }
@@ -468,7 +468,7 @@ static int luaP_p_tupleindex (lua_State *L) {
         i = idx;
         if (i >= 0) {
             if (!t->null[i])
-                luaP_pushdatum(L, t->value[i], tupleDesc->attrs[i]->atttypid);
+                luaP_pushdatum(L, t->value[i], TupleDescAttr(tupleDesc, i)->atttypid);
             else lua_pushnil(L);
         }
         else {
@@ -497,7 +497,7 @@ static int luaP_tupleindex (lua_State *L) {
       }
       for (i = 0; i< tupleDesc->natts; ++i){
 
-          if (strcmp(NameStr(tupleDesc->attrs[i]->attname),name) == 0){
+          if (strcmp(NameStr(TupleDescAttr(tupleDesc, i)->attname),name) == 0){
               idx = i;
               break;
           }
@@ -505,7 +505,7 @@ static int luaP_tupleindex (lua_State *L) {
       i = idx;
       if (i >= 0) {
           if (!t->null[i])
-            luaP_pushdatum(L, t->value[i], tupleDesc->attrs[i]->atttypid);
+            luaP_pushdatum(L, t->value[i], TupleDescAttr(tupleDesc, i)->atttypid);
           else lua_pushnil(L);
       }
       else {
@@ -525,7 +525,7 @@ static int luaP_tupleindex (lua_State *L) {
 
   if (i >= 0) {
       if (!t->null[i])
-        luaP_pushdatum(L, t->value[i], t->tupdesc->attrs[i]->atttypid);
+        luaP_pushdatum(L, t->value[i], TupleDescAttr(t->tupdesc, i)->atttypid);
       else lua_pushnil(L);
   }
   else lua_pushnil(L);
@@ -545,8 +545,8 @@ static int luaP_tuplenewindex (lua_State *L) {
   lua_settop(L, 3);
   if (i >= 0) { /* found? */
     bool isnull;
-    t->value[i] = luaP_todatum(L, t->tupdesc->attrs[i]->atttypid,
-        t->tupdesc->attrs[i]->atttypmod, &isnull, -1);
+    t->value[i] = luaP_todatum(L, TupleDescAttr(t->tupdesc, i)->atttypid,
+        TupleDescAttr(t->tupdesc, i)->atttypmod, &isnull, -1);
     t->null[i] = isnull;
     t->changed = 1;
   }
@@ -584,7 +584,7 @@ void luaP_pushtuple_trg (lua_State *L, TupleDesc desc, HeapTuple tuple,
     t->rtupdesc = 0;
     for (i = 0; i < n; i++) {
         bool isnull;
-        t->value[i] = heap_getattr(tuple, desc->attrs[i]->attnum, desc,
+        t->value[i] = heap_getattr(tuple, TupleDescAttr(desc, i)->attnum, desc,
                                    &isnull);
         t->null[i] = isnull;
     }
@@ -641,12 +641,12 @@ HeapTuple luaP_casttuple (lua_State *L, TupleDesc tupdesc) {
   b = luaP_getbuffer(L, tupdesc->natts);
   for (i = 0; i < tupdesc->natts; i++) {
     int j;
-    lua_getfield(L, -1, NameStr(tupdesc->attrs[i]->attname));
+    lua_getfield(L, -1, NameStr(TupleDescAttr(tupdesc, i)->attname));
     j = luaL_optinteger(L, -1, -1);
     if (j >= 0) {
       if (t->changed == -1) /* read-only? */
         b->value[i] = heap_getattr(t->tuple,
-            t->tupdesc->attrs[j]->attnum, t->tupdesc, b->null + i);
+            TupleDescAttr(t->tupdesc, j)->attnum, t->tupdesc, b->null + i);
       else {
         b->value[i] = t->value[j];
         b->null[i] = t->null[j];

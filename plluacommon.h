@@ -82,6 +82,18 @@ MemoryContext luaP_getmemctxt (lua_State *L);
 lua_State *pllua_getmaster (lua_State *L);
 int pllua_getmaster_index(lua_State *L);
 
+#if PG_VERSION_NUM < 110000
+    #define TupleDescAttr(tupdesc, i) ((tupdesc)->attrs[(i)])
+
+    #define pg_create_context(name) \
+            AllocSetContextCreate(TopMemoryContext, \
+                name, ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, \
+                ALLOCSET_DEFAULT_MAXSIZE);
+#else
+    #define pg_create_context(name) \
+            AllocSetContextCreate(TopMemoryContext, name, ALLOCSET_DEFAULT_SIZES);
+#endif
+
 #define lua_swap(L) lua_insert(L, -2)
 
 #define luaP_getfield(L, s) \
