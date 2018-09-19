@@ -53,7 +53,7 @@ static void stb_exit(SubTransactionBlock *block, bool success){
 
 /* all exceptions should be thrown only through luaL_error
  * we might me be here if there is a postgres unhandled exception
- * and lua migth be in an inconsistant state that's why the process aborted
+ * and lua migth be in an inconsistent state that's why the process aborted
  */
 #define WRAP_SUBTRANSACTION(source_code)  do\
 {\
