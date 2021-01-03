@@ -1,6 +1,6 @@
 # pllua 
 
-[DEPRECATED] This repository is no longer maintained. Please follow https://github.com/pllua/pllua-ng
+[DEPRECATED] This repository is no longer maintained. Please follow https://github.com/pllua/pllua
 =====
 
 PL/Lua is an implementation of Lua as a loadable procedural language for PostgreSQL: with PL/Lua you can use PostgreSQL functions and triggers written in the Lua programming language.
