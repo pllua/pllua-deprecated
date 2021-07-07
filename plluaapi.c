@@ -12,6 +12,8 @@
 #include "pllua_pgfunc.h"
 #include "pllua_subxact.h"
 #include "pllua_errors.h"
+#include "pllua_xact_cleanup.h"
+#include "miscadmin.h"
 
 
 /*
@@ -44,6 +46,13 @@ typedef struct luaP_Info {
   Oid arg[1];
 } luaP_Info;
 
+typedef struct  {
+  Oid fn_oid;
+
+  Oid user_id;
+  luaP_Info *fInfo;
+} Proc_cache;
+
 /* extended type info */
 typedef struct luaP_Typeinfo {
   int oid;
@@ -66,6 +75,8 @@ typedef struct luaP_Datum {
 
 static const char PLLUA_TYPEINFO[] = "typeinfo";
 static const char PLLUA_DATUM[] = "datum";
+
+static HTAB *pllua_procedure_cache = NULL;
 
 #define PLLUA_LOCALVAR "_U"
 #define PLLUA_SHAREDVAR "shared"
@@ -643,56 +654,12 @@ lua_State *luaP_newstate (int trusted) {
 
 
 /* ======= luaP_pushfunction ======= */
+/* leaves function  for oid in stack, returns function info (fi) */
+static luaP_Info *luaP_pushfunction_by_oid (lua_State *L, Oid oid,
+                                            HeapTuple prepared_proc) {
+  luaP_Info *fi = NULL;
+  HeapTuple proc;
 
-static luaP_Info *luaP_newinfo (lua_State *L, int nargs, int oid,
-    Form_pg_proc procst) {
-  Oid *argtype = procst->proargtypes.values;
-  Oid rettype = procst->prorettype;
-  bool isset = procst->proretset;
-  luaP_Info *fi;
-  int i;
-  luaP_Typeinfo *ti;
-  bool code_storage = ((nargs == 1)
-                       &&(argtype[0] == INTERNALOID)
-                       &&(rettype == INTERNALOID));
-
-
-  fi = lua_newuserdata(L, sizeof(luaP_Info) + nargs * sizeof(Oid));
-  fi->funcxt_wp = NULL;
-  fi->oid = oid;
-  fi->code_storage = code_storage;
-  if(!code_storage){
-      /* read arg types */
-      for (i = 0; i < nargs; i++) {
-        ti = luaP_gettypeinfo(L, argtype[i]);
-        if (ti->type == TYPTYPE_PSEUDO)
-          ereport(ERROR,
-              (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-               errmsg("[pllua]: functions cannot take type '%s'",
-              format_type_be(argtype[i]))));
-        fi->arg[i] = argtype[i];
-      }
-      /* read result type */
-      ti = luaP_gettypeinfo(L, rettype);
-      if (ti->type == TYPTYPE_PSEUDO && rettype != VOIDOID && rettype != TRIGGEROID)
-        ereport(ERROR,
-            (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-             errmsg("[pllua]: functions cannot return type '%s'",
-               format_type_be(rettype))));
-  }else{
-      fi->arg[0] = INTERNALOID;
-  }
-  fi->vararg = rettype == TRIGGEROID; /* triggers are vararg */
-  fi->result = rettype;
-  fi->result_isset = isset;
-  fi->L = NULL;
-  return fi;
-}
-
-/* test argument and return types, compile function, store it at registry,
- * and return info at the top of stack  */
-static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
-    luaP_Info **fi) {
   int nargs; /* fcinfo->nargs */
   Form_pg_proc procst;
   bool isnull;
@@ -700,34 +667,91 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   const char *source, *fname;
   text *t;
   luaL_Buffer b;
-  int init = (*fi == NULL); /* not initialized? */
+
+  bool code_storage = false;
   const char *chunk_name = NULL;//PLLUA_CHUNKNAME;
+
+
+  proc = prepared_proc ? prepared_proc : SearchSysCache(PROCOID, ObjectIdGetDatum((Oid) oid), 0, 0, 0);
+  if (!HeapTupleIsValid(proc))
+    elog(ERROR, "[pllua]: cache lookup failed for function %u", (Oid) oid);
+
+
   /* read proc info */
   procst = (Form_pg_proc) GETSTRUCT(proc);
   prosrc = SysCacheGetAttr(PROCOID, proc, Anum_pg_proc_prosrc, &isnull);
   if (isnull) elog(ERROR, "[pllua]: null prosrc");
   nargs = procst->pronargs;
   /* get info userdata */
-  if (init) {
-    lua_push_oidstring(L, oid);
-    *fi = luaP_newinfo(L, nargs, oid, procst);
+ {
+      MemoryContext mcxt;
+      MemoryContext m;
+
+      Oid *argtype = procst->proargtypes.values;
+      Oid rettype = procst->prorettype;
+      int i;
+      luaP_Typeinfo *ti;
+
+      code_storage = ((nargs == 1)
+                           &&(argtype[0] == INTERNALOID)
+                           &&(rettype == INTERNALOID));
+
+      mcxt = get_common_ctx();
+      m  = MemoryContextSwitchTo(mcxt);
+      fi = (luaP_Info *)palloc(sizeof(luaP_Info) + nargs * sizeof(Oid));
+      m  = MemoryContextSwitchTo(m);
+
+      fi->funcxt_wp = NULL;
+      fi->oid = oid;
+      fi->code_storage = code_storage;
+      if(!code_storage){
+          /* read arg types */
+          for (i = 0; i < nargs; i++) {
+            ti = luaP_gettypeinfo(L, argtype[i]);
+            if (ti->type == TYPTYPE_PSEUDO){
+              pfree(fi);
+              ereport(ERROR,
+                  (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                   errmsg("[pllua]: functions cannot take type '%s'",
+                  format_type_be(argtype[i]))));
+            }
+            fi->arg[i] = argtype[i];
+          }
+          /* read result type */
+          ti = luaP_gettypeinfo(L, rettype);
+          if (ti->type == TYPTYPE_PSEUDO && rettype != VOIDOID && rettype != TRIGGEROID){
+            pfree(fi);
+            ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("[pllua]: functions cannot return type '%s'",
+                   format_type_be(rettype))));
+          }
+      }else{
+          fi->arg[0] = INTERNALOID;
+      }
+      fi->vararg = rettype == TRIGGEROID; /* triggers are vararg */
+      fi->result = rettype;
+      fi->result_isset = procst->proretset;
+      fi->L = NULL;
+
   }
-  lua_pushlightuserdata(L, (void *) *fi);
+
   /* check #argnames */
-  if ((nargs > 0)&&((*fi)->code_storage == 0)) {
+  if ((nargs > 0)&&(fi->code_storage == 0)) {
     int nnames;
     Datum argnames = SysCacheGetAttr(PROCOID, proc,
         Anum_pg_proc_proargnames, &isnull);
     if (!isnull)
       deconstruct_array(DatumGetArrayTypeP(argnames), TEXTOID, -1, false,
           'i', &argname, NULL, &nnames);
-    if (nnames != nargs)
-      (*fi)->vararg = 1;
+    if (nnames != nargs){
+      fi->vararg = 1;
+    }
     else { /* check empty names */
       int i;
-      for (i = 0; i < nnames && !(*fi)->vararg; i++) {
+      for (i = 0; i < nnames && !fi->vararg; i++) {
         if (VARSIZE(DatumGetTextP(argname[i])) == VARHDRSZ) /* empty? */
-          (*fi)->vararg = 1;
+          fi->vararg = 1;
       }
     }
   }
@@ -743,8 +767,8 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
   luaL_addlstring(&b, fname, strlen(fname));
   luaL_addlstring(&b, "=function(", 10);
   /* read arg names */
-  if((*fi)->code_storage == 0){
-      if ((*fi)->vararg) luaL_addlstring(&b, "...", 3);
+  if(fi->code_storage == 0){
+      if (fi->vararg) luaL_addlstring(&b, "...", 3);
       else {
         int i;
         for (i = 0; i < nargs; i++) {
@@ -754,6 +778,7 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
         }
       }
   }
+
   luaL_addlstring(&b, ") ", 2);
   /* read source */
   t = DatumGetTextP(prosrc);
@@ -772,53 +797,17 @@ static void luaP_newfunction (lua_State *L, int oid, HeapTuple proc,
       chunk_name = fname;
 #endif
 
-
   if (luaL_loadbuffer(L, source, strlen(source), chunk_name))
     luapg_error(L, "compile");
   lua_remove(L, -2); /* source */
   if (lua_pcall(L, 0, 1, 0)) luapg_error(L, "call");
-  rowstamp_set(&(*fi)->stamp, proc); /* row-stamp info */
-  lua_pushvalue(L, -1); /* func */
-  if (init) {
-    lua_insert(L, -5);
-    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[light_info] = func */
-    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[oid] = info */
-  }
-  else {
-    lua_insert(L, -3);
-    lua_rawset(L, LUA_REGISTRYINDEX); /* REG[light_info] = func */
-  }
-}
+  rowstamp_set(&fi->stamp, proc); /* row-stamp info */
 
-/* leaves function info (fi) for oid in stack */
-static luaP_Info *luaP_pushfunction (lua_State *L, int oid) {
-  luaP_Info *fi = NULL;
-  HeapTuple proc;
-  proc = SearchSysCache(PROCOID, ObjectIdGetDatum((Oid) oid), 0, 0, 0);
-  if (!HeapTupleIsValid(proc))
-    elog(ERROR, "[pllua]: cache lookup failed for function %u", (Oid) oid);
-  lua_push_oidstring(L, oid);
-  lua_rawget(L, LUA_REGISTRYINDEX);
-  if (lua_isnil(L, -1)) { /* not interned? */
-    lua_pop(L, 1); /* nil */
-    luaP_newfunction(L, oid, proc, &fi);
-  }
-  else {
-    fi = lua_touserdata(L, -1);
-    lua_pop(L, 1); /* info udata */
-    lua_pushlightuserdata(L, (void *) fi);
-    if (rowstamp_check(&fi->stamp, proc)) /* not replaced? */
-      lua_rawget(L, LUA_REGISTRYINDEX);
-    else {
-      lua_pushnil(L);
-      lua_rawset(L, LUA_REGISTRYINDEX); /* REG[old_light_info] = nil */
-      luaP_newfunction(L, oid, proc, &fi);
-    }
-  }
-  ReleaseSysCache(proc);
+
+  if (!prepared_proc)
+      ReleaseSysCache(proc);
   return fi;
 }
-
 
 /* ======= luaP_pushargs ======= */
 
@@ -1261,8 +1250,25 @@ Datum luaP_validator (lua_State *L, Oid oid) {
     elog(ERROR, "[pllua]: could not connect to SPI manager");
   PG_TRY();
   {
-    luaP_pushfunction(L, (int) oid);
-    lua_pop(L, 1);
+    Proc_cache *volatile cache;
+    luaP_Info * fi;
+    bool found = false;
+    cache = hash_search(pllua_procedure_cache, &oid, HASH_ENTER, &found);
+    if(found){
+        if (cache->fInfo){
+            pfree(cache->fInfo);
+        }
+    }
+    cache->fInfo = NULL;
+
+    fi = luaP_pushfunction_by_oid(L, oid, NULL);
+    cache->fInfo = fi;
+    cache->user_id = GetUserId();
+
+    lua_pushlightuserdata(L,  fi); //[..func, fi]
+    lua_swap(L);
+    lua_rawset(L, LUA_REGISTRYINDEX);
+
   }
   PG_CATCH();
   {
@@ -1278,16 +1284,92 @@ Datum luaP_validator (lua_State *L, Oid oid) {
   return 0; /* VOID */
 }
 
+void
+init_procedure_caches(void)
+{
+    HASHCTL		hash_ctl;
+
+    memset(&hash_ctl, 0, sizeof(hash_ctl));
+    hash_ctl.keysize = sizeof(Oid);
+    hash_ctl.entrysize = sizeof(Proc_cache);
+    hash_ctl.hash = oid_hash;
+    pllua_procedure_cache = hash_create("PL/Lua procedures", 32, &hash_ctl,
+                                      HASH_ELEM | HASH_FUNCTION );
+
+}
+
+
 Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
   Datum retval = 0;
   int base = 0;
   luaP_Info *fi;
   RTupDescStack prev;
+  Proc_cache *volatile cache;
+  bool found = false;
+  Oid fn_oid = fcinfo->flinfo->fn_oid;
+
   bool istrigger;
+
   if (SPI_connect() != SPI_OK_CONNECT)
     elog(ERROR, "[pllua]: could not connect to SPI manager");
   istrigger = CALLED_AS_TRIGGER(fcinfo);
-  fi = luaP_pushfunction(L, (int) fcinfo->flinfo->fn_oid);
+
+  cache = hash_search(pllua_procedure_cache, &fn_oid, HASH_ENTER, &found);
+
+  if (found){
+      bool	uptodate;
+      HeapTuple proc;
+      fi = cache->fInfo;
+
+
+      proc = SearchSysCache(PROCOID, ObjectIdGetDatum((Oid) fn_oid), 0, 0, 0);
+      if (!HeapTupleIsValid(proc))
+        elog(ERROR, "[pllua]: cache lookup failed for function %u", (Oid) fn_oid);
+
+      uptodate = (cache->fInfo && rowstamp_check(&fi->stamp, proc)&&(cache->user_id == GetUserId()));
+
+      if (uptodate) {
+                lua_pushlightuserdata(L,  fi);
+                lua_rawget(L, LUA_REGISTRYINDEX);
+                if(lua_isnil(L, -1)) {
+                    lua_pop(L, 1);
+                    uptodate = false;
+                }
+      }
+      found = uptodate;
+
+      if(!uptodate) {
+
+                    if (cache->fInfo){
+                        pfree(cache->fInfo);
+                    }
+                    cache->fInfo = NULL;
+
+                    fi = luaP_pushfunction_by_oid(L, fcinfo->flinfo->fn_oid, proc);
+                    cache->fInfo = fi;
+                    cache->user_id = GetUserId();
+
+                    lua_pushvalue(L, -1); //[..func, func]
+
+                    lua_pushlightuserdata(L,  fi); //[..func, func, fi]
+                    lua_swap(L);
+                    lua_rawset(L, LUA_REGISTRYINDEX);
+       }
+      ReleaseSysCache(proc);
+
+  }else{
+      cache->fInfo = NULL;
+      fi = luaP_pushfunction_by_oid(L, fcinfo->flinfo->fn_oid, NULL);
+      cache->fInfo = fi;
+      cache->user_id = GetUserId();
+
+      lua_pushvalue(L, -1); //[..func, func]
+
+      lua_pushlightuserdata(L,  fi); //[..func, func, fi]
+      lua_swap(L);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+  }
+
   if (fi->code_storage == 1){
     luaL_error(L, "attempt to call non-callable function");
   }
@@ -1416,9 +1498,6 @@ Datum luaP_callhandler (lua_State *L, FunctionCallInfo fcinfo) {
     elog(ERROR, "[pllua]: could not disconnect from SPI manager");
   return retval;
 }
-
-
-
 
 #include "rtupdesc.h"
 #if PG_VERSION_NUM >= 90000
