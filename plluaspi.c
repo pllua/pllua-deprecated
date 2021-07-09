@@ -765,11 +765,7 @@ static int luaP_cursortostring (lua_State *L) {
 
 static int luaP_cursorfetch (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
-#if LUA_VERSION_NUM >= 503
   SPI_cursor_fetch(c->cursor, 1, luaL_optinteger(L, 2, FETCH_ALL));
-#else
-  SPI_cursor_fetch(c->cursor, 1, luaL_optlong(L, 2, FETCH_ALL));
-#endif
   if (SPI_processed > 0) /* any rows? */
     luaP_pushtuptable(L, c->cursor);
   else
@@ -779,11 +775,7 @@ static int luaP_cursorfetch (lua_State *L) {
 
 static int luaP_cursormove (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
-#if LUA_VERSION_NUM >= 503
   SPI_cursor_move(c->cursor, 1, luaL_optinteger(L, 2, 0));
-#else
-  SPI_cursor_move(c->cursor, 1, luaL_optlong(L, 2, 0));
-#endif
   return 0;
 }
 
@@ -791,11 +783,7 @@ static int luaP_cursormove (lua_State *L) {
 static int luaP_cursorposfetch (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
-#if LUA_VERSION_NUM >= 503
   SPI_scroll_cursor_fetch(c->cursor, fd, luaL_optinteger(L, 2, FETCH_ALL));
-#else
-  SPI_scroll_cursor_fetch(c->cursor, fd, luaL_optlong(L, 2, FETCH_ALL));
-#endif
   if (SPI_processed > 0) /* any rows? */
     luaP_pushtuptable(L, c->cursor);
   else
@@ -806,11 +794,7 @@ static int luaP_cursorposfetch (lua_State *L) {
 static int luaP_cursorposmove (lua_State *L) {
   luaP_Cursor *c = (luaP_Cursor *) luaP_checkudata(L, 1, PLLUA_CURSORMT);
   FetchDirection fd = (lua_toboolean(L, 3)) ? FETCH_RELATIVE : FETCH_ABSOLUTE;
-#if LUA_VERSION_NUM >= 503
   SPI_scroll_cursor_move(c->cursor, fd, luaL_optinteger(L, 2, 0));
-#else
-  SPI_scroll_cursor_move(c->cursor, fd, luaL_optlong(L, 2, 0));
-#endif
   return 0;
 }
 #endif
@@ -844,11 +828,7 @@ static int luaP_plantostring (lua_State *L) {
 static int luaP_executeplan (lua_State *L) {
   luaP_Plan *p = (luaP_Plan *) luaP_checkudata(L, 1, PLLUA_PLANMT);
   bool ro = (bool) lua_toboolean(L, 3);
-#if LUA_VERSION_NUM >= 503
   long c = luaL_optinteger(L, 4, 0);
-#else
-  long c = luaL_optlong(L, 4, 0);
-#endif
   int result = -1;
   Datum *values = NULL;
   char *nulls = NULL;
@@ -1003,11 +983,7 @@ static int luaP_execute (lua_State *L) {
   PLLUA_PG_CATCH_RETHROW(
     result = SPI_execute(luaL_checkstring(L, 1),
                          (bool) lua_toboolean(L, 2),
-#if LUA_VERSION_NUM >= 503
                          luaL_optinteger(L, 3, 0));
-#else
-                         luaL_optlong(L, 3, 0));
-#endif
   );
   if (result < 0)
     return luaL_error(L, "SPI_execute_plan error: %d", result);

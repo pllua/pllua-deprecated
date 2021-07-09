@@ -13,11 +13,7 @@ int luaB_assert (lua_State *L) {
 }
 
 int luaB_error (lua_State *L) {
-#if LUA_VERSION_NUM >= 503
     int level = luaL_optinteger(L, 2, 1);
-#else
-    int level = luaL_optint(L, 2, 1);
-#endif
     lua_settop(L, 1);
     if (lua_isnoneornil(L, 1)){
         if (lua_isnil(L, 1)){

@@ -6,8 +6,8 @@ PKG_LIBDIR := $(shell $(PG_CONFIG) --pkglibdir)
 # Lua specific
 
 # General
-LUA_INCDIR ?= /usr/include/lua5.1
-LUALIB ?= -L/usr/local/lib -llua5.1
+LUA_INCDIR ?= /usr/include/lua
+LUALIB ?= -L/usr/local/lib -llua
 
 # LuaJIT
 #LUA_INCDIR = /usr/local/include/luajit-2.0

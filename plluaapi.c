@@ -610,7 +610,7 @@ lua_State *luaP_newstate (int trusted) {
   luaP_registerspi(L);
   lua_setglobal(L, PLLUA_SPIVAR);
   if (trusted) {
-	
+
     const char *package_keys[] = { /* to be removed */
       "preload", "loadlib", "loaders", "seeall", NULL};
     const char *global_keys[] = { /* to be removed */
@@ -872,8 +872,13 @@ void luaP_pushdatum (lua_State *L, Datum dat, Oid type) {
       lua_pushinteger(L, (lua_Integer) DatumGetInt32(dat));
       break;
     case INT8OID:
+#if LUA_VERSION_NUM >= 503
+      if (sizeof(lua_Integer) >= 8)
+        lua_pushinteger(L, (lua_Integer) DatumGetInt64(dat));
+      else
+#endif
         setInt64lua(L,(DatumGetInt64(dat)));
-        break;
+      break;
     case TEXTOID:
       lua_pushstring(L, text2string(dat));
       break;
@@ -1098,18 +1103,21 @@ Datum luaP_todatum (lua_State *L, Oid type, int typmod, bool *isnull, int idx) {
         dat = Int32GetDatum(lua_tointeger(L, idx));
         break;
       case INT8OID:
-#ifdef USE_FLOAT8_BYVAL
-        dat = Int64GetDatum(get64lua(L, idx));
-        break;
-#else
-      {
-        int64* value = (int64*)SPI_palloc(sizeof(int64));
-        *value = get64lua(L, idx);
-        dat = PointerGetDatum(value);
-        break;
-      }
+#if LUA_VERSION_NUM >= 503
+        if (sizeof(lua_Integer) >= 8)
+          dat = Int64GetDatum(lua_tointeger(L, idx));
+        else
 #endif
-
+#ifdef USE_FLOAT8_BYVAL
+          dat = Int64GetDatum(get64lua(L, idx));
+#else
+        {
+          int64* value = (int64*)SPI_palloc(sizeof(int64));
+          *value = get64lua(L, idx);
+          dat = PointerGetDatum(value);
+        }
+#endif
+        break;
       case TEXTOID: {
         const char *s = lua_tostring(L, idx);
         if (s == NULL) elog(ERROR,
